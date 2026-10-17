@@ -7,5 +7,4 @@
 target/
 .env.prod
 deploy/secrets/
-docs/
 
