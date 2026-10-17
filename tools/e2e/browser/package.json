@@ -1,0 +1,8 @@
+{
+  "name": "wtc-e2e-browser",
+  "private": true,
+  "description": "Parcours navigateur du back-office pour l'essai de bout en bout (npm install && npm run check)",
+  "type": "module",
+  "scripts": { "check": "node web-check.mjs" },
+  "dependencies": { "playwright": "^1.50.0" }
+}
