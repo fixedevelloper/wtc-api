@@ -42,6 +42,13 @@ for tag, items in by_tag.items():
 (ROOT / 'docs/design/api-overview.md').write_text('\n'.join(lines))
 
 # ------------------------------------------------------------------ frontend-migration.md
+# Ce guide croise le contrat avec le code des clients (dépôts voisins). Dans le dépôt de l'API isolé (CI), ces sources sont
+# absentes : on laisse le guide versionné tel quel au lieu d'échouer. Il se régénère depuis le monorepo.
+ANDROID_SRC = ROOT.parent / 'transfertWeDoc/app/src/main/java/com/ballack/transfertwedoc/data/api/ApiService.kt'
+if not ANDROID_SRC.exists():
+    print(f'{len(ops)} opérations ; frontend-migration.md non régénéré (sources Android absentes : dépôt de l\'API isolé)')
+    raise SystemExit(0)
+
 replaced = collections.defaultdict(list)
 for x in ops:
     for r in x['o'].get('x-replaces', []):
@@ -49,7 +56,7 @@ for x in ops:
         replaced[(m, norm(p))].append(x)
 
 android = []
-src = (ROOT.parent / 'transfertWeDoc/app/src/main/java/com/ballack/transfertwedoc/data/api/ApiService.kt').read_text()
+src = ANDROID_SRC.read_text()
 for m in re.finditer(r'@(GET|POST|PUT|DELETE|PATCH)\("([^"]+)"\)', src):
     android.append((m.group(1), '/' + m.group(2).lstrip('/')))
 paylink = []

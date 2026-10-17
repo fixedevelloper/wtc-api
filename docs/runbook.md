@@ -13,38 +13,31 @@ L'API répond sur `http://localhost:8080`. La supervision est sur le port **8081
 
 ## Déployer avec Docker (image construite par GitHub Actions)
 
-**Construction.** La CI (`.github/workflows/ci.yml`) construit l'image à chaque pull request (build, scan Trivy), sans la publier. Sur `main` et sur un tag `v*`, une fois build, contrat et scan verts, le job `publish` pousse l'image dans **GitHub Container Registry** : `ghcr.io/<organisation>/<dépôt>` avec les tags `latest` (main), `sha-<commit>` (immuable), `1.2.3` et `1.2` (tag `v1.2.3`). Elle est accompagnée d'une attestation de provenance et d'un SBOM. Aucun secret à créer : le job utilise le `GITHUB_TOKEN`.
+**Ce que fait la CI** (`.github/workflows/ci.yml`, un seul job) : à chaque push sur `main` (ou lancement manuel), elle construit l'image, la pousse dans **GitHub Container Registry** (`ghcr.io/<propriétaire>/wtc-api` avec les tags `latest` et `<sha du commit>`), puis se connecte en SSH au serveur, tire l'image et relance l'API. `up -d --wait` fait échouer le job si l'API ne devient pas « healthy » en 180 s. Elle ne lance **ni tests ni analyses** : `./mvnw verify` se lance à la main avant de pousser.
 
-**Réglages GitHub à faire une fois.** Le paquet est privé par défaut : le rendre visible à l'organisation ou le laisser privé et créer un jeton personnel (classic) avec la seule portée `read:packages` pour le serveur.
+**Mise en place une seule fois.**
 
-**Sur le serveur** (fichiers dans `deploy/`) :
+1. GitHub > *Settings* > *Environments* > `production` > secrets : `SERVER_HOST`, `SERVER_PORT`, `SERVER_USER`, `SERVER_SSH_KEY` (clé privée dédiée au déploiement).
+2. Sur le serveur, dans `/opt/wtc` (propriétaire : l'utilisateur SSH, membre du groupe `docker`) :
 
 ```bash
-echo "<jeton read:packages>" | docker login ghcr.io -u <utilisateur> --password-stdin
-cd deploy && cp .env.prod.example .env.prod      # remplir TOUTES les valeurs ; WTC_IMAGE = ghcr.io/<org>/<dépôt>:<tag>
+cp compose.prod.yaml .env.prod.example .    # depuis le dossier deploy/ du dépôt
+cp .env.prod.example .env.prod              # remplir TOUTES les valeurs ; WTC_IMAGE=ghcr.io/<propriétaire>/wtc-api:latest
+chmod 600 .env.prod
 mkdir -p secrets && cp <clé RSA PKCS#8> secrets/jwt-private.pem && chmod 644 secrets/jwt-private.pem
-docker compose --env-file .env.prod -f compose.prod.yaml up -d
+docker compose --env-file .env.prod -f compose.prod.yaml up -d      # premier démarrage (la CI tire l'image elle-même)
 ```
 
-- L'API n'écoute qu'en `127.0.0.1:8080` : un reverse proxy TLS (Caddy, Nginx, Traefik) doit être placé devant. Le port de supervision 8081 n'est jamais publié ; la sonde de santé est celle de l'image (`HEALTHCHECK`).
+3. Le paquet GHCR est privé par défaut : la CI se connecte au registre avec le jeton du job, valable le temps du déploiement et fermé ensuite. Un `docker compose pull` manuel sur le serveur demande donc d'abord un `docker login ghcr.io` (jeton personnel `read:packages`).
+
+**À savoir**
+
+- L'API n'écoute qu'en `127.0.0.1:8080` : un reverse proxy TLS (Caddy, Nginx, Traefik) doit être placé devant. Le port de supervision 8081 n'est jamais publié.
 - PostgreSQL n'est joignable que depuis le réseau interne du compose. Flyway applique les migrations au démarrage.
 - Le stockage objet est **externe** (S3 ou équivalent) ; le bucket est créé par l'infrastructure, jamais par l'application.
-- **Mise à jour** : changer `WTC_IMAGE` (préférer un tag `sha-…` ou `1.2.3` à `latest`), puis `docker compose … pull api && docker compose … up -d api`. **Retour arrière** : remettre l'ancien tag.
-- Avant le premier démarrage, voir « Mise en service du fournisseur » plus bas (IP de sortie déclarée à Wace) ; `WTC_PAYMENT_PROVIDER` et les canaux de notification ne doivent jamais valoir `fake`.
+- **Retour arrière** : mettre un tag `<sha>` précédent dans `WTC_IMAGE` (`.env.prod`) puis `docker compose … pull api && docker compose … up -d api`. Les migrations Flyway ne reculent pas : une migration déjà appliquée doit rester compatible avec la version précédente.
+- `WTC_PAYMENT_PROVIDER` et les canaux de notification ne doivent jamais valoir `fake`. Déclarer l'IP de sortie du serveur à Wace avant le premier transfert réel (voir « Mise en service du fournisseur »).
 - Sauvegarder ensemble la base, le bucket et `WTC_SECURITY_ENCRYPTION_KEY` (à part).
-
-**Déploiement automatisé par SSH** (`.github/workflows/deploy.yml`, lancé à la main : onglet *Actions* > *Déploiement* > *Run workflow*, on saisit le tag : `sha-<commit complet>`, `1.2.3`, `1.2` ou `latest`).
-
-Le workflow vérifie que l'image existe, copie `compose.prod.yaml` et `deploy.sh` sur le serveur, puis lance `deploy.sh` : mise à jour de `WTC_IMAGE`, `pull`, redémarrage de l'API, attente de l'état « healthy » (180 s). **Si l'API n'est pas saine, l'image précédente est remise automatiquement** et le workflow échoue. Le serveur tire l'image avec le jeton du job (valable le temps du déploiement) et se déconnecte de GHCR ensuite : aucun jeton durable n'est stocké sur le serveur. Un `docker compose pull` manuel exige donc un `docker login ghcr.io` préalable.
-
-Mise en place, une seule fois :
-
-1. **Serveur** : un utilisateur dédié (ex. `deploy`) dans le groupe `docker`, propriétaire de `/opt/wtc` (ou autre répertoire) qui contient `.env.prod` (droits `600`) et `secrets/jwt-private.pem`. Les migrations Flyway ne reculent pas : le retour arrière ne reprend que le code.
-2. **Clé SSH** dédiée au déploiement : `ssh-keygen -t ed25519 -f deploy_key -N "" -C github-deploy`, clé publique dans `~deploy/.ssh/authorized_keys`, jamais réutilisée ailleurs.
-3. **GitHub** > *Settings* > *Environments* > `production` : activer *Required reviewers* (le déploiement attend une validation), restreindre aux branches `main`, puis ajouter :
-   - secrets : `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (clé privée complète), `DEPLOY_KNOWN_HOSTS` (sortie de `ssh-keyscan -t ed25519 <hôte>`, **à vérifier contre l'empreinte du serveur** : la clé d'hôte est épinglée, jamais acceptée à l'aveugle) ;
-   - variables (facultatives) : `DEPLOY_PORT` (22), `DEPLOY_PATH` (`/opt/wtc`), `DEPLOY_HEALTH_URL` (ex. `https://api.exemple.com/actuator/health`, contrôlé de l'extérieur après le déploiement).
-4. Le premier déploiement suppose que `docker compose … up -d` a déjà été fait une fois à la main (base créée, super-administrateur amorcé), ou que `.env.prod` est complet.
 
 ## Variables d'environnement
 

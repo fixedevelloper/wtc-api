@@ -2,8 +2,8 @@
 #   cp .env.prod.example .env.prod    # puis renseigner TOUTES les valeurs (aucun secret dans le dépôt)
 #   mkdir -p secrets && cp <clé privée RSA PKCS#8> secrets/jwt-private.pem && chmod 644 secrets/jwt-private.pem
 #   docker compose --env-file .env.prod -f compose.prod.yaml up -d
-# Mise à jour : changer WTC_IMAGE dans .env.prod (de préférence un tag sha-… ou 1.2.3, pas « latest »), puis
-#   docker compose --env-file .env.prod -f compose.prod.yaml pull api && docker compose --env-file .env.prod -f compose.prod.yaml up -d api
+# Mise à jour : faite par la CI (voir docs/runbook.md). À la main : docker compose --env-file .env.prod -f compose.prod.yaml pull api
+#   puis la même commande avec « up -d api ».
 # Le stockage objet (pièces KYC, photos) est EXTERNE : S3 ou équivalent, bucket privé créé par l'infrastructure.
 name: wtc
 
