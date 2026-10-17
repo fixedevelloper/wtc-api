@@ -1,0 +1,12 @@
+
+.env
+.idea/
+*.iml
+.local/
+# Secrets et fichiers locaux
+target/
+.env.prod
+deploy/secrets/
+tools/
+docs/
+

@@ -1,0 +1,38 @@
+wtc:
+  cors:
+    allowed-origins: https://app.example.test
+  security:
+    service-key: test-service-key-0123456789abcdef
+    encryption-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=   # clé de test uniquement (32 octets)
+    login:
+      max-failed-attempts: 3
+  rate-limits:                       # plafonds larges : les tests de limitation les abaissent explicitement
+    login-per-email-per-minute: 1000
+    login-per-ip-per-minute: 1000
+    register-per-ip-per-hour: 1000
+    password-reset-per-email-per-hour: 1000
+    password-reset-per-ip-per-hour: 1000
+    refresh-per-ip-per-minute: 1000
+    sensitive-actions-per-user-per-hour: 1000
+  tasks:
+    enabled: false
+  notification:
+    email:
+      provider: fake
+    whatsapp:
+      provider: fake
+    telegram:
+      provider: fake
+      admin-chat-id: "-1001"
+    links:
+      web-base-url: https://app.wtc.example
+    worker:
+      enabled: false
+      ops-watcher-enabled: false
+  payment:
+    provider: fake
+    worker:
+      enabled: false          # les tests pilotent les travailleurs à la main : déterministe
+management:
+  server:
+    port: ${MANAGEMENT_PORT:0}      # port aléatoire : évite tout conflit entre contextes de test

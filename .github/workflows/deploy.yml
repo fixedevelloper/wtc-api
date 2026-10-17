@@ -1,0 +1,104 @@
+name: Déploiement
+
+# Manuel uniquement : on choisit la version à mettre en production (un tag de l'image publiée par la CI).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de l'image : sha-<commit complet>, 1.2.3, 1.2 ou latest"
+        required: true
+        default: latest
+        type: string
+
+# Un seul déploiement à la fois, jamais interrompu en cours de route.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read              # le serveur tire l'image avec le jeton du job, valable le temps du déploiement
+
+jobs:
+  deploy:
+    name: Déployer en production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Réglages > Environments > production : relecteurs obligatoires, et secrets/variables ci-dessous rattachés ici.
+    environment:
+      name: production
+      url: ${{ vars.DEPLOY_HEALTH_URL }}
+    env:
+      TAG: ${{ inputs.tag }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/wtc' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Valider la version demandée et composer l'image
+        run: |
+          # La saisie n'est jamais interpolée dans le script (variable d'environnement) et doit avoir une forme connue.
+          if ! [[ "$TAG" =~ ^(latest|sha-[0-9a-f]{40}|[0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag invalide : « $TAG »"; exit 1
+          fi
+          for v in DEPLOY_HOST DEPLOY_USER; do
+            [ -n "${!v}" ] || { echo "::error::Secret $v manquant (environnement production)"; exit 1; }
+          done
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${TAG}" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vérifier que l'image existe avant de toucher au serveur
+        run: docker buildx imagetools inspect "$IMAGE" >/dev/null
+
+      - name: Préparer SSH (clé d'hôte épinglée)
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [ -n "$SSH_KEY" ] && [ -n "$KNOWN_HOSTS" ] || { echo "::error::Secrets DEPLOY_SSH_KEY et DEPLOY_KNOWN_HOSTS requis"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CONF
+          Host prod
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $DEPLOY_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 15
+          CONF
+
+      - name: Envoyer le compose et le script
+        run: |
+          ssh prod "mkdir -p '$DEPLOY_PATH'"
+          scp deploy/compose.prod.yaml deploy/deploy.sh "prod:$DEPLOY_PATH/"
+
+      - name: Déployer (arrêt et retour arrière si l'API n'est pas « healthy »)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          # Le jeton transite par l'entrée standard (jamais dans la ligne de commande ni dans les journaux).
+          # Il expire à la fin du job ; la session Docker du serveur est fermée aussitôt après.
+          printf '%s' "$GHCR_TOKEN" | ssh prod "docker login ghcr.io -u '$GHCR_USER' --password-stdin >/dev/null"
+          trap 'ssh prod "docker logout ghcr.io >/dev/null 2>&1 || true"' EXIT
+          ssh prod "chmod +x '$DEPLOY_PATH/deploy.sh' && '$DEPLOY_PATH/deploy.sh' '$IMAGE' '$DEPLOY_PATH'"
+
+      - name: Vérification externe (si DEPLOY_HEALTH_URL est défini)
+        if: ${{ vars.DEPLOY_HEALTH_URL != '' }}
+        run: |
+          for i in $(seq 1 10); do
+            curl -fsS --max-time 10 "${{ vars.DEPLOY_HEALTH_URL }}" && exit 0
+            sleep 6
+          done
+          echo "::error::${{ vars.DEPLOY_HEALTH_URL }} ne répond pas"; exit 1

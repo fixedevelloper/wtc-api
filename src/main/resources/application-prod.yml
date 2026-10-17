@@ -1,0 +1,7 @@
+logging:
+  structured:
+    format:
+      console: logstash            # logs JSON (requestId, traceId dans le MDC)
+spring:
+  jpa:
+    show-sql: false

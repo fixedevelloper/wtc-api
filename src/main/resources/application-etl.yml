@@ -1,0 +1,29 @@
+# Profil de l'ETL de migration (phase 10) : exécution unique, jamais l'API.
+# ./mvnw spring-boot:run -Dspring-boot.run.profiles=etl -Dspring-boot.run.arguments="--wtc.etl.source-url=jdbc:mariadb://..."
+# Le contexte web reste chargé (la sécurité de l'API en dépend) mais n'écoute que sur un port local aléatoire, le temps de l'ETL.
+server:
+  port: 0
+  address: 127.0.0.1
+management:
+  server:
+    port: 0
+    address: 127.0.0.1
+wtc:
+  etl:
+    run: true
+  tasks:
+    enabled: false
+  notification:
+    worker:
+      enabled: false
+      ops-watcher-enabled: false
+    email:
+      provider: ${WTC_NOTIFY_EMAIL_PROVIDER:disabled}
+    whatsapp:
+      provider: ${WTC_NOTIFY_WHATSAPP_PROVIDER:disabled}
+    telegram:
+      provider: ${WTC_NOTIFY_TELEGRAM_PROVIDER:disabled}
+  payment:
+    provider: ${WTC_PAYMENT_PROVIDER:fake}   # aucun appel Wace pendant l'ETL
+    worker:
+      enabled: false

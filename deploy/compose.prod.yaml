@@ -1,0 +1,57 @@
+# Déploiement de production sur un hôte Docker : l'API (image construite et publiée par GitHub Actions) + PostgreSQL.
+#   cp .env.prod.example .env.prod    # puis renseigner TOUTES les valeurs (aucun secret dans le dépôt)
+#   mkdir -p secrets && cp <clé privée RSA PKCS#8> secrets/jwt-private.pem && chmod 644 secrets/jwt-private.pem
+#   docker compose --env-file .env.prod -f compose.prod.yaml up -d
+# Mise à jour : changer WTC_IMAGE dans .env.prod (de préférence un tag sha-… ou 1.2.3, pas « latest »), puis
+#   docker compose --env-file .env.prod -f compose.prod.yaml pull api && docker compose --env-file .env.prod -f compose.prod.yaml up -d api
+# Le stockage objet (pièces KYC, photos) est EXTERNE : S3 ou équivalent, bucket privé créé par l'infrastructure.
+name: wtc
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wtc
+      POSTGRES_USER: ${DATABASE_USER:-wtc}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?définir DATABASE_PASSWORD dans .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-wtc} -d wtc"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [internal]          # jamais publié : seule l'API y accède
+
+  api:
+    image: ${WTC_IMAGE:?définir WTC_IMAGE dans .env.prod (ex. ghcr.io/<organisation>/<dépôt>:<tag>)}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/wtc
+      WTC_SECURITY_JWT_PRIVATE_KEY_LOCATION: file:/run/secrets/jwt-private.pem
+    volumes:
+      - ./secrets/jwt-private.pem:/run/secrets/jwt-private.pem:ro
+    ports:
+      # Publié sur l'interface locale seulement : placer un reverse proxy TLS (Caddy, Nginx, Traefik) devant.
+      # Le port 8081 (supervision) n'est volontairement jamais publié.
+      - "127.0.0.1:${PORT:-8080}:8080"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    # Si le conteneur s'arrête aussitôt avec « exec … operation not permitted », retirer cette ligne : bug connu d'AppArmor et de
+    # certains noyaux (vérifié sur Ubuntu 24.04, noyau 6.8) qui touche tous les conteneurs, pas cette image.
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 30s
+    networks: [internal, default]   # « default » : sortie vers Wace, le stockage objet, SMTP
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    internal: true

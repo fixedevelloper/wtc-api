@@ -1,0 +1,4 @@
+logging:
+  level:
+    com.wtc: DEBUG
+    org.hibernate.SQL: DEBUG

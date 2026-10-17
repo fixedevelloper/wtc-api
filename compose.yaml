@@ -1,0 +1,72 @@
+# Environnement de développement local : `docker compose up -d postgres` (base seule) ou `docker compose --profile app up --build`.
+# Préparer d'abord les secrets locaux : cp .env.example .env && tools/dev-keys.sh
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wtc
+      POSTGRES_USER: ${DATABASE_USER:-wtc}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?définir DATABASE_PASSWORD dans .env}
+    ports:
+      - "127.0.0.1:5432:5432"       # jamais exposé hors de la machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-wtc} -d wtc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${WTC_STORAGE_ACCESS_KEY:?définir WTC_STORAGE_ACCESS_KEY dans .env}
+      MINIO_ROOT_PASSWORD: ${WTC_STORAGE_SECRET_KEY:?définir WTC_STORAGE_SECRET_KEY dans .env}
+    ports:
+      - "127.0.0.1:9000:9000"       # API S3 : les liens signés remis aux clients pointent ici en local
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DATABASE_URL: jdbc:postgresql://postgres:5432/wtc
+      DATABASE_USER: ${DATABASE_USER:-wtc}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      WTC_SECURITY_JWT_PRIVATE_KEY_LOCATION: file:/run/secrets/jwt-private.pem
+      WTC_STORAGE_ENDPOINT: http://minio:9000
+      WTC_STORAGE_PUBLIC_ENDPOINT: http://localhost:9000   # hôte des liens signés vus depuis la machine
+      WTC_STORAGE_ACCESS_KEY: ${WTC_STORAGE_ACCESS_KEY}
+      WTC_STORAGE_SECRET_KEY: ${WTC_STORAGE_SECRET_KEY}
+      WTC_STORAGE_AUTO_CREATE_BUCKET: "true"                # développement uniquement
+      WTC_NOTIFY_EMAIL_PROVIDER: ${WTC_NOTIFY_EMAIL_PROVIDER:-fake}       # développement ; jamais « fake » en production
+      WTC_NOTIFY_WHATSAPP_PROVIDER: ${WTC_NOTIFY_WHATSAPP_PROVIDER:-fake}
+      WTC_NOTIFY_TELEGRAM_PROVIDER: ${WTC_NOTIFY_TELEGRAM_PROVIDER:-fake}
+      WTC_SERVICE_KEY: ${WTC_SERVICE_KEY:-}
+      WTC_PAYMENT_PROVIDER: ${WTC_PAYMENT_PROVIDER:-fake}   # développement : faux fournisseur ; jamais « fake » en production
+      WTC_SECURITY_ENCRYPTION_KEY: ${WTC_SECURITY_ENCRYPTION_KEY:?définir WTC_SECURITY_ENCRYPTION_KEY dans .env (openssl rand -base64 32)}
+      WTC_BOOTSTRAP_SUPER_ADMIN_EMAIL: ${WTC_BOOTSTRAP_SUPER_ADMIN_EMAIL:-}
+      WTC_BOOTSTRAP_SUPER_ADMIN_PASSWORD: ${WTC_BOOTSTRAP_SUPER_ADMIN_PASSWORD:-}
+      WTC_SECURITY_JWT_ISSUER: ${WTC_SECURITY_JWT_ISSUER:-wtc-api}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./.local/jwt-private.pem:/run/secrets/jwt-private.pem:ro
+    ports:
+      - "127.0.0.1:8080:8080"       # API ; le port 8081 (supervision) n'est volontairement pas publié
+
+volumes:
+  pgdata:
+  miniodata:

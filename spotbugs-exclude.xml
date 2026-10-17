@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Exclusions justifiées uniquement. Toute nouvelle exclusion doit citer sa raison. -->
+<FindBugsFilter>
+  <!-- Les entités JPA ont un constructeur sans argument protégé et des champs modifiés par Hibernate. -->
+  <Match>
+    <Class name="~com\.wtc\..*\.infrastructure\..*Entity"/>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2,UWF_UNWRITTEN_FIELD,NP_UNWRITTEN_FIELD,UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR"/>
+  </Match>
+  <!-- Les records de configuration sont immuables par construction. -->
+  <Match>
+    <Class name="~com\.wtc\.shared\.config\..*"/>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- API sans état : jeton Bearer dans l'en-tête Authorization, aucun cookie ni session, donc CSRF sans objet. -->
+  <Match>
+    <Class name="com.wtc.shared.security.SecurityConfig"/>
+    <Bug pattern="SPRING_CSRF_PROTECTION_DISABLED"/>
+  </Match>
+  <!-- X-Request-Id n'est repris dans la réponse qu'après validation stricte par liste blanche (^[A-Za-z0-9._-]{8,64}$). -->
+  <Match>
+    <Class name="com.wtc.shared.web.RequestIdFilter"/>
+    <Bug pattern="HRS_REQUEST_PARAMETER_TO_HTTP_HEADER"/>
+  </Match>
+  <!-- Collaborateur Spring injecté par constructeur (service d'un autre module) : la référence est celle du conteneur, pas une copie exposée. -->
+  <Match>
+    <Class name="com.wtc.customer.application.CustomerAccounts"/>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- Collaborateurs techniques injectés par constructeur (mappeur JSON partagé du conteneur) : références du conteneur, pas des copies exposées. -->
+  <Match>
+    <Or>
+      <Class name="com.wtc.payment.infrastructure.WacePayoutGateway"/>
+      <Class name="com.wtc.reference.application.ReferenceService"/>
+    </Or>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+  <!-- Corps HTML des courriels : chaque valeur y entre par NotificationTemplates.escape (&, <, >, guillemets), vérifié par NotificationTemplatesTest. -->
+  <Match>
+    <Class name="com.wtc.notification.application.NotificationTemplates"/>
+    <Bug pattern="POTENTIAL_XML_INJECTION"/>
+  </Match>
+</FindBugsFilter>

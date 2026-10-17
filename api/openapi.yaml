@@ -1,0 +1,5692 @@
+# Source de vérité du contrat d'API. Validé par tools/check_openapi.sh.
+openapi: 3.1.0
+info:
+  title: WTC API
+  version: 1.0.0-draft
+  summary: API de transfert d'argent WTC (clients, back-office, webhooks Wace).
+  description: |-
+    Contrat de la refonte (phase 0b), **à valider avec les équipes web et Android avant tout code**.
+
+    - Base unique `/api`, sans numéro de version : évolutions additives uniquement ; en cas de rupture inévitable, en-tête `Api-Version` et période de dépréciation.
+    - Identité tirée du jeton : aucune route ne prend un identifiant de client dans l'URL côté client (`/me/...`).
+    - Montants : chaînes décimales + devise ; dates ISO-8601 UTC ; erreurs `application/problem+json` (RFC 9457) avec `code` stable.
+    - Pagination : `page` (à partir de 0), `size` (≤ 100), `sort=champ,asc|desc` ; réponse `{page,size,totalElements,totalPages,content[]}`.
+    - Opérations d'argent : en-tête `Idempotency-Key` obligatoire.
+    - `x-origin` : `existing` = remplace une route Symfony (voir `x-replaces`), `new` = ajout de la refonte. `x-pending` = dépend de la spécification Wace.
+  license:
+    name: Propriétaire
+    identifier: LicenseRef-Proprietary
+servers:
+- url: /api
+  description: Base unique des routes
+tags:
+- name: Authentification
+- name: Mon compte
+- name: Portefeuille
+  description: Portefeuilles par devise, relevés (client et back-office).
+- name: Expéditeurs
+- name: Bénéficiaires
+- name: Transferts
+- name: Recharges
+- name: Référentiels
+- name: Administration
+security:
+- bearerAuth: []
+paths:
+  /auth/register:
+    post:
+      operationId: register
+      tags:
+      - Authentification
+      summary: Créer un compte client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      security: []
+      x-origin: existing
+      x-replaces:
+      - POST /auth/register
+  /auth/login:
+    post:
+      operationId: login
+      tags:
+      - Authentification
+      summary: Se connecter (client ou back-office)
+      description: Remplace les trois logins actuels. Si la 2FA est activée (obligatoire pour le personnel), la réponse est un `MfaChallenge`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security: []
+      x-origin: existing
+      x-replaces:
+      - POST /auth/logincustomer
+      - POST /auth/signin
+      - POST /v2/auth/login
+      - POST /auth/v3/login
+  /auth/mfa/verify:
+    post:
+      operationId: verifyMfa
+      tags:
+      - Authentification
+      summary: Valider le second facteur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaVerifyRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security: []
+      x-origin: new
+  /auth/refresh:
+    post:
+      operationId: refreshToken
+      tags:
+      - Authentification
+      summary: Renouveler les jetons (rotation du refresh token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security: []
+      x-origin: existing
+      x-replaces:
+      - POST /auth/refresh
+  /auth/logout:
+    post:
+      operationId: logout
+      tags:
+      - Authentification
+      summary: Révoquer la famille de refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: new
+  /auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      tags:
+      - Authentification
+      summary: Demander une réinitialisation
+      description: Répond toujours 204 (pas de fuite d'existence du compte).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      security: []
+      x-origin: new
+  /auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags:
+      - Authentification
+      summary: Définir un nouveau mot de passe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      security: []
+      x-origin: new
+  /me:
+    get:
+      operationId: getMe
+      tags:
+      - Mon compte
+      summary: Profil de l'utilisateur connecté
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/profile/{id}
+    patch:
+      operationId: updateMe
+      tags:
+      - Mon compte
+      summary: Modifier mon profil
+      description: Les champs absents restent inchangés. Le changement d'adresse e-mail n'est pas encore pris en charge (`EMAIL_CHANGE_UNSUPPORTED`). Une identité vérifiée (KYC) ne peut plus changer de nom, de date de naissance ni de type (`KYC_LOCKED`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/profile
+  /me/password:
+    put:
+      operationId: changePassword
+      tags:
+      - Mon compte
+      summary: Changer mon mot de passe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/change_password
+  /me/photo:
+    put:
+      operationId: uploadPhoto
+      tags:
+      - Mon compte
+      summary: Définir ma photo de profil
+      description: JPEG ou PNG, 2 Mio au plus. Remplace la photo précédente.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+              - file
+              additionalProperties: false
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      x-origin: existing
+      x-replaces:
+      - POST /auth/changephoto
+  /me/mfa/enrollment:
+    post:
+      operationId: startMfaEnrollment
+      tags:
+      - Mon compte
+      summary: Démarrer l'activation de la 2FA (TOTP)
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaEnrollment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-origin: new
+  /me/mfa/confirmation:
+    post:
+      operationId: confirmMfaEnrollment
+      tags:
+      - Mon compte
+      summary: Confirmer l'activation de la 2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCodeRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-origin: new
+  /me/mfa:
+    delete:
+      operationId: disableMfa
+      tags:
+      - Mon compte
+      summary: Désactiver la 2FA (interdit au personnel)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaCodeRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-origin: new
+  /me/wallet:
+    get:
+      operationId: getWallet
+      tags:
+      - Mon compte
+      summary: Mon portefeuille
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: new
+      parameters:
+      - &id001
+        $ref: '#/components/parameters/WalletCurrency'
+      description: Portefeuille principal (devise du pays de résidence) ou, avec `currency`, le portefeuille de cette devise. Créé à la première lecture.
+  /me/wallet/entries:
+    get:
+      operationId: listWalletEntries
+      tags:
+      - Mon compte
+      summary: Relevé de mon portefeuille
+      parameters:
+      - *id001
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: new
+  /me/kyc:
+    get:
+      operationId: getKyc
+      tags:
+      - Mon compte
+      summary: État de ma vérification d'identité
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: new
+  /me/kyc/documents:
+    post:
+      operationId: uploadKycDocument
+      tags:
+      - Mon compte
+      summary: Déposer un document KYC
+      description: JPEG, PNG ou PDF, 5 Mo au plus ; stockage privé.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                documentType:
+                  type: string
+                side:
+                  type: string
+                  enum:
+                  - FRONT
+                  - BACK
+                  - SINGLE
+                expiresOn:
+                  type: string
+                  format: date
+                file:
+                  type: string
+                  format: binary
+              required:
+              - documentType
+              - file
+              additionalProperties: false
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycDocument'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+      x-origin: existing
+      x-replaces:
+      - POST /
+  /me/kyc/documents/{documentId}:
+    get:
+      operationId: getKycDocument
+      tags:
+      - Mon compte
+      summary: Un document KYC (avec lien de téléchargement signé)
+      parameters:
+      - $ref: '#/components/parameters/documentId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycDocument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/senders:
+    get:
+      operationId: listSenders
+      tags:
+      - Expéditeurs
+      summary: Mes expéditeurs
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartyPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/senders/{id}
+      - GET /v2/all_senders/{id}
+    post:
+      operationId: createSender
+      tags:
+      - Expéditeurs
+      summary: Créer un expéditeur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/senders
+  /me/senders/{senderId}:
+    get:
+      operationId: getSender
+      tags:
+      - Expéditeurs
+      summary: Un expéditeur
+      parameters:
+      - $ref: '#/components/parameters/senderId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/senders/{id}/{sender_id}/one
+    put:
+      operationId: updateSender
+      tags:
+      - Expéditeurs
+      summary: Modifier un expéditeur
+      description: 'Remplace les champs. `idDocumentNumber` est facultatif : s''il est absent, le numéro déjà enregistré est conservé.'
+      parameters:
+      - $ref: '#/components/parameters/senderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/senders/update/{id}
+      - POST /v2/sender/update
+    delete:
+      operationId: archiveSender
+      tags:
+      - Expéditeurs
+      summary: Archiver un expéditeur
+      parameters:
+      - $ref: '#/components/parameters/senderId'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/beneficiaries:
+    get:
+      operationId: listBeneficiaries
+      tags:
+      - Bénéficiaires
+      summary: Mes bénéficiaires
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartyPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/beneficiaries/{id}
+      - GET /v2/all_beneficiaries/{id}
+    post:
+      operationId: createBeneficiary
+      tags:
+      - Bénéficiaires
+      summary: Créer un bénéficiaire
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/beneficiaries
+  /me/beneficiaries/{beneficiaryId}:
+    get:
+      operationId: getBeneficiary
+      tags:
+      - Bénéficiaires
+      summary: Un bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/beneficiaries/{id}/one
+    put:
+      operationId: updateBeneficiary
+      tags:
+      - Bénéficiaires
+      summary: Modifier un bénéficiaire
+      description: 'Remplace les champs. `idDocumentNumber` est facultatif : s''il est absent, le numéro déjà enregistré est conservé.'
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Party'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/beneficiaries/update/{id}
+    delete:
+      operationId: archiveBeneficiary
+      tags:
+      - Bénéficiaires
+      summary: Archiver un bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/beneficiaries/{beneficiaryId}/destinations:
+    get:
+      operationId: listDestinations
+      tags:
+      - Bénéficiaires
+      summary: Comptes et portefeuilles d'un bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Destination'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+    post:
+      operationId: createDestination
+      tags:
+      - Bénéficiaires
+      summary: Ajouter un compte ou un portefeuille
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DestinationInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Destination'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/beneficiaries/{beneficiaryId}/destinations/{destinationId}:
+    put:
+      operationId: updateDestination
+      tags:
+      - Bénéficiaires
+      summary: Modifier une destination
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      - $ref: '#/components/parameters/destinationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DestinationInput'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Destination'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+    delete:
+      operationId: archiveDestination
+      tags:
+      - Bénéficiaires
+      summary: Archiver une destination
+      parameters:
+      - $ref: '#/components/parameters/beneficiaryId'
+      - $ref: '#/components/parameters/destinationId'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/transfers/quote:
+    post:
+      operationId: quoteTransfer
+      tags:
+      - Transferts
+      summary: Calculer frais, taux et total avant d'envoyer
+      description: 'Le serveur fait foi : frais, taux et total ne sont plus calculés par les clients.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferQuoteRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferQuote'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/tauxechanges/{id}
+  /me/transfers:
+    post:
+      operationId: createTransfer
+      tags:
+      - Transferts
+      summary: Envoyer de l'argent (banque ou mobile)
+      description: Débit atomique du portefeuille, puis ordre Wace par outbox. `expectedTotalDebit` (facultatif) protège contre un changement de frais entre le devis et l'envoi.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransferRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/transferts/bank
+      - POST /v2/transferts/mobile
+    get:
+      operationId: listTransfers
+      tags:
+      - Transferts
+      summary: Mes transferts
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferSummaryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/transactions/{id}
+      - GET /v2/last_transactions
+  /me/transfers/{transferId}:
+    get:
+      operationId: getTransfer
+      tags:
+      - Transferts
+      summary: Détail d'un transfert
+      parameters:
+      - $ref: '#/components/parameters/transferId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/transactions/detail/{id}
+  /me/transfers/{transferId}/receipt:
+    get:
+      operationId: getTransferReceipt
+      tags:
+      - Transferts
+      summary: Reçu PDF
+      parameters:
+      - $ref: '#/components/parameters/transferId'
+      responses:
+        '200':
+          description: Fichier.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /me/top-ups:
+    get:
+      operationId: listTopUps
+      tags:
+      - Recharges
+      summary: Mes recharges
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopUpPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/recharges/{id}
+    post:
+      operationId: createTopUp
+      tags:
+      - Recharges
+      summary: Recharger par mobile money (Wace Pay-In)
+      description: Crédit du portefeuille une seule fois, à la confirmation de Wace.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTopUpRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopUp'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/recharges
+  /me/top-ups/proof:
+    post:
+      operationId: createManualTopUp
+      tags:
+      - Recharges
+      summary: Recharger avec une preuve de paiement
+      description: Validée ensuite par le personnel.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                amount:
+                  $ref: '#/components/schemas/Decimal'
+                file:
+                  type: string
+                  format: binary
+              required:
+              - amount
+              - file
+              additionalProperties: false
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopUp'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - POST /v2/recharges/upload
+  /me/top-ups/{topUpId}:
+    get:
+      operationId: getTopUp
+      tags:
+      - Recharges
+      summary: Une recharge
+      parameters:
+      - $ref: '#/components/parameters/topUpId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopUp'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: new
+  /countries:
+    get:
+      operationId: listCountries
+      tags:
+      - Référentiels
+      summary: Pays
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Country'
+      security: []
+      x-origin: existing
+      x-replaces:
+      - GET /v2/countries
+      - GET /api/countries
+      - GET /auth/countries
+  /countries/{countryCode}/cities:
+    get:
+      operationId: listCities
+      tags:
+      - Référentiels
+      summary: Villes d'un pays
+      parameters:
+      - $ref: '#/components/parameters/CountryCode'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/City'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security: []
+      x-origin: existing
+      x-replaces:
+      - GET /v2/cities/{id}
+      - GET /v2/cities/{code}/codeiso
+  /countries/{countryCode}/banks:
+    get:
+      operationId: listBanks
+      tags:
+      - Référentiels
+      summary: Banques d'un pays
+      parameters:
+      - $ref: '#/components/parameters/CountryCode'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Bank'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/banklists/{id}
+  /countries/{countryCode}/mobile-operators:
+    get:
+      operationId: listMobileOperators
+      tags:
+      - Référentiels
+      summary: Opérateurs mobiles d'un pays
+      parameters:
+      - $ref: '#/components/parameters/CountryCode'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MobileOperator'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-origin: existing
+      x-replaces:
+      - GET /v2/operatorslists/{id}
+      - GET /v2/operators/{id}
+  /reference/transfer-purposes:
+    get:
+      operationId: listTransferPurposes
+      tags:
+      - Référentiels
+      summary: Motifs de transfert
+      parameters:
+      - $ref: '#/components/parameters/PartyTypePair'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReferenceValue'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /wace_raison_to_send.json
+      - GET /v2/wace_data
+  /reference/sources-of-funds:
+    get:
+      operationId: listSourcesOfFunds
+      tags:
+      - Référentiels
+      summary: Origines des fonds
+      parameters:
+      - $ref: '#/components/parameters/PartyTypePair'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReferenceValue'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /wace_origin_fond.json
+      - GET /v2/wace_data
+  /reference/relationships:
+    get:
+      operationId: listRelationships
+      tags:
+      - Référentiels
+      summary: Liens avec le bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/PartyTypePair'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReferenceValue'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: existing
+      x-replaces:
+      - GET /wace_relaction.json
+      - GET /v2/wace_data
+  /meta/client-requirements:
+    get:
+      operationId: getClientRequirements
+      tags:
+      - Référentiels
+      summary: Version minimale des applications
+      description: Permet d'imposer une mise à jour (Android, web).
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClientRequirements'
+      security: []
+      x-origin: new
+  /docs/openapi.yaml:
+    get:
+      operationId: getOpenApiContract
+      tags:
+      - Référentiels
+      summary: Contrat OpenAPI de cette API
+      description: Le fichier servi est exactement celui validé en CI et utilisé pour générer les clients.
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/yaml:
+              schema:
+                type: string
+      security: []
+      x-origin: new
+  /web-tokens/{token}:
+    get:
+      operationId: inspectWebToken
+      tags:
+      - Référentiels
+      summary: Lire un jeton web (service WhatsApp)
+      parameters:
+      - $ref: '#/components/parameters/token'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebToken'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - serviceKey: []
+      x-origin: existing
+      x-replaces:
+      - GET /api/verify-token/{token}
+  /web-tokens/{token}/consume:
+    post:
+      operationId: consumeWebToken
+      tags:
+      - Référentiels
+      summary: Consommer un jeton web (service WhatsApp)
+      parameters:
+      - $ref: '#/components/parameters/token'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsumeWebTokenRequest'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      security:
+      - serviceKey: []
+      x-origin: existing
+      x-replaces:
+      - POST /api/consume-token/{token}
+  /admin/customers:
+    get:
+      operationId: adminListCustomers
+      tags:
+      - Administration
+      summary: Clients
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerSummaryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: CUSTOMER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/customers
+  /admin/customers/{customerId}:
+    get:
+      operationId: adminGetCustomer
+      tags:
+      - Administration
+      summary: Fiche client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/customers/{id}
+    patch:
+      operationId: adminUpdateCustomerStatus
+      tags:
+      - Administration
+      summary: Suspendre, réactiver ou clôturer un client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerStatusRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: CUSTOMER_WRITE
+      x-origin: new
+  /admin/parties:
+    get:
+      operationId: adminListParties
+      tags:
+      - Administration
+      summary: Expéditeurs et bénéficiaires de tous les clients
+      description: 'Recherche globale (nom, téléphone, e-mail). Filtres : `role`, `customerId`.'
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/PartyRole'
+      - $ref: '#/components/parameters/CustomerFilter'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPartyPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: CUSTOMER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/senders
+      - GET /v2/admin/beneficiaries
+      - GET /v2/admin/customers/senders/{id}
+      - GET /v2/admin/all_senders/{id}
+      - GET /v2/admin/all_beneficiaries/{id}
+  /admin/parties/{partyId}:
+    get:
+      operationId: adminGetParty
+      tags:
+      - Administration
+      summary: Un expéditeur ou bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/partyId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminParty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/senders/{id}/one
+      - GET /v2/admin/beneficiaries/{id}/one
+    put:
+      operationId: adminUpdateParty
+      tags:
+      - Administration
+      summary: Corriger un expéditeur ou bénéficiaire
+      parameters:
+      - $ref: '#/components/parameters/partyId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartyInput'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminParty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_WRITE
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/senders/{id}/update
+      - POST /v2/admin/beneficiaries/{id}/update
+  /admin/customers/{customerId}/wallet:
+    get:
+      operationId: adminGetCustomerWallet
+      tags:
+      - Administration
+      summary: Portefeuille d'un client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      - *id001
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_READ
+      x-origin: new
+  /admin/customers/{customerId}/kyc:
+    get:
+      operationId: adminGetCustomerKyc
+      tags:
+      - Administration
+      summary: Documents KYC d'un client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: KYC_REVIEW
+      x-origin: new
+  /admin/customers/{customerId}/kyc/documents/{documentId}/review:
+    post:
+      operationId: adminReviewKycDocument
+      tags:
+      - Administration
+      summary: Valider ou rejeter un document KYC
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      - $ref: '#/components/parameters/documentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KycReviewRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycDocument'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: KYC_REVIEW
+      x-origin: existing
+      x-replaces:
+      - GET /v1/customers/{id}/validate
+  /admin/transfers:
+    get:
+      operationId: adminListTransfers
+      tags:
+      - Administration
+      summary: Tous les transferts
+      description: 'Recherche : référence, nom, téléphone. Filtres : `status`, `from`, `to`, `customerId`.'
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/TransferStatusFilter'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      - $ref: '#/components/parameters/CustomerFilter'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransferSummaryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: TRANSFER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/transactions
+    post:
+      operationId: adminCreateTransfer
+      tags:
+      - Administration
+      summary: Saisir un transfert pour un client
+      description: Avec `OFFLINE_RECEIPT`, les fonds reçus hors plateforme sont enregistrés au grand livre avant l'envoi (plus de transfert sans écriture).
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateTransferRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: TRANSFER_CREATE
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/transactions/bank
+  /admin/transfers/quote:
+    post:
+      operationId: adminQuoteTransfer
+      tags:
+      - Administration
+      summary: Devis d'un transfert saisi pour un client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminTransferQuoteRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferQuote'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: TRANSFER_CREATE
+      x-origin: existing
+      x-replaces:
+      - GET /v2/tauxechanges/{id}
+  /admin/transfers/{transferId}:
+    get:
+      operationId: adminGetTransfer
+      tags:
+      - Administration
+      summary: Détail d'un transfert (tentatives d'envoi, historique)
+      parameters:
+      - $ref: '#/components/parameters/transferId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransfer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: TRANSFER_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/transactions/detail/{id}
+  /admin/transfers/{transferId}/sync:
+    post:
+      operationId: adminSyncTransfer
+      tags:
+      - Administration
+      summary: Interroger Wace sur l'état du transfert
+      parameters:
+      - $ref: '#/components/parameters/transferId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransfer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: TRANSFER_REFUND
+      x-origin: new
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      description: Interroge immédiatement le fournisseur. Avec `providerReference`, rattache l'ordre d'un transfert bloqué en « création incertaine » et reprend le suivi normal.
+  /admin/transfers/{transferId}/refund:
+    post:
+      operationId: adminRefundTransfer
+      tags:
+      - Administration
+      summary: Rembourser un transfert échoué
+      parameters:
+      - $ref: '#/components/parameters/transferId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: TRANSFER_REFUND
+      x-origin: new
+      description: Autorisé sur un transfert `FAILED`, ou — sur décision humaine motivée — sur un transfert `PAYOUT_PENDING` bloqué en « création incertaine » après vérification dans le back-office de Wace qu'aucun ordre n'existe. Jamais pour un ordre en cours chez Wace.
+  /admin/top-ups:
+    get:
+      operationId: adminListTopUps
+      tags:
+      - Administration
+      summary: Toutes les recharges
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/TopUpStatusFilter'
+      - $ref: '#/components/parameters/CustomerFilter'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTopUpPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: TOPUP_REVIEW
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/recharges
+  /admin/top-ups/{topUpId}/approve:
+    post:
+      operationId: adminApproveTopUp
+      tags:
+      - Administration
+      summary: Valider une recharge par preuve (crédit du portefeuille)
+      parameters:
+      - $ref: '#/components/parameters/topUpId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTopUp'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: TOPUP_REVIEW
+      x-origin: existing
+      x-replaces:
+      - POST /v1/prefrundings/admin/validate
+  /admin/top-ups/{topUpId}/reject:
+    post:
+      operationId: adminRejectTopUp
+      tags:
+      - Administration
+      summary: Rejeter une recharge par preuve
+      parameters:
+      - $ref: '#/components/parameters/topUpId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectionRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTopUp'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: TOPUP_REVIEW
+      x-origin: new
+  /admin/balance-adjustments:
+    get:
+      operationId: adminListBalanceAdjustments
+      tags:
+      - Administration
+      summary: Ajustements de solde
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAdjustmentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: BALANCE_ADJUST_REQUEST
+      x-origin: new
+    post:
+      operationId: adminRequestBalanceAdjustment
+      tags:
+      - Administration
+      summary: Demander un ajustement de solde
+      description: Aucun mouvement tant qu'une autre personne n'a pas approuvé.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBalanceAdjustmentRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAdjustment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: BALANCE_ADJUST_REQUEST
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/update-balance
+  /admin/balance-adjustments/{adjustmentId}/approve:
+    post:
+      operationId: adminApproveBalanceAdjustment
+      tags:
+      - Administration
+      summary: Approuver (personne différente de l'initiateur)
+      parameters:
+      - $ref: '#/components/parameters/adjustmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAdjustment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: BALANCE_ADJUST_APPROVE
+      x-origin: new
+      description: Approuve et écrit au grand livre. Refusé (403) si l'approbateur est le demandeur ; refusé (422) si un débit dépasserait le solde, la demande reste alors en attente.
+  /admin/balance-adjustments/{adjustmentId}/reject:
+    post:
+      operationId: adminRejectBalanceAdjustment
+      tags:
+      - Administration
+      summary: Rejeter un ajustement
+      parameters:
+      - $ref: '#/components/parameters/adjustmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectionRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAdjustment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: BALANCE_ADJUST_APPROVE
+      x-origin: new
+  /admin/users:
+    get:
+      operationId: adminListUsers
+      tags:
+      - Administration
+      summary: Comptes du personnel
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUserPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: USER_MANAGE
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/users
+    post:
+      operationId: adminCreateUser
+      tags:
+      - Administration
+      summary: Créer un compte du personnel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStaffUserRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: USER_MANAGE
+      x-origin: new
+  /admin/users/{userId}:
+    patch:
+      operationId: adminUpdateUser
+      tags:
+      - Administration
+      summary: Modifier rôles ou statut
+      parameters:
+      - $ref: '#/components/parameters/userId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStaffUserRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: USER_MANAGE
+      x-origin: new
+  /admin/users/{userId}/mfa-reset:
+    post:
+      operationId: adminResetUserMfa
+      tags:
+      - Administration
+      summary: Réinitialiser la 2FA d'un compte
+      parameters:
+      - $ref: '#/components/parameters/userId'
+      responses:
+        '204':
+          description: Aucun contenu.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: USER_MANAGE
+      x-origin: new
+  /admin/audit-logs:
+    get:
+      operationId: adminListAuditLogs
+      tags:
+      - Administration
+      summary: Journal d'audit
+      description: 'Filtres : `entityType`, `entityId`, `actor`, `from`, `to`.'
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      - $ref: '#/components/parameters/EntityType'
+      - $ref: '#/components/parameters/EntityId'
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/From'
+      - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogEntryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: AUDIT_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/audits
+  /admin/login-audits:
+    get:
+      operationId: adminListLoginAudits
+      tags:
+      - Administration
+      summary: Journal des connexions
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginAuditEntryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: AUDIT_READ
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/connexions
+  /admin/pricing-zones:
+    get:
+      operationId: adminListPricingZones
+      tags:
+      - Administration
+      summary: Zones tarifaires
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PricingZone'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/zones
+    post:
+      operationId: adminCreatePricingZone
+      tags:
+      - Administration
+      summary: Créer une zone tarifaire
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PricingZoneInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingZone'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/zones
+  /admin/fee-schedules:
+    get:
+      operationId: adminListFeeSchedules
+      tags:
+      - Administration
+      summary: Barèmes de frais
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeeSchedule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/grilletarifaires
+    post:
+      operationId: adminCreateFeeSchedule
+      tags:
+      - Administration
+      summary: Ajouter une tranche (datée)
+      description: Les tranches d'une même zone ne peuvent pas se chevaucher sur une même période (contrainte base de données).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeeScheduleInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeSchedule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/grilletarifaires
+  /admin/fee-schedules/{feeScheduleId}:
+    patch:
+      operationId: adminEndFeeSchedule
+      tags:
+      - Administration
+      summary: Clôturer une tranche
+      parameters:
+      - $ref: '#/components/parameters/feeScheduleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EndFeeScheduleRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeSchedule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/exchange-rates:
+    get:
+      operationId: adminListExchangeRates
+      tags:
+      - Administration
+      summary: Taux de change
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRatePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+    post:
+      operationId: adminCreateExchangeRate
+      tags:
+      - Administration
+      summary: Publier un taux
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExchangeRateInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/web-tokens:
+    get:
+      operationId: adminListWebTokens
+      tags:
+      - Administration
+      summary: Jetons web
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminWebTokenPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: TRANSFER_CREATE
+      x-origin: existing
+      x-replaces:
+      - GET /v2/admin/webtokens
+    post:
+      operationId: adminCreateWebToken
+      tags:
+      - Administration
+      summary: Créer un jeton web
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebTokenRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedWebToken'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: TRANSFER_CREATE
+      x-origin: existing
+      x-replaces:
+      - POST /v2/admin/webtokens
+  /admin/reconciliation/runs:
+    get:
+      operationId: adminListReconciliationRuns
+      tags:
+      - Administration
+      summary: Réconciliations avec Wace
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationRunPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: RECONCILIATION_RUN
+      x-origin: new
+    post:
+      operationId: adminStartReconciliation
+      tags:
+      - Administration
+      summary: Lancer une réconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReconciliationRequest'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationRun'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: RECONCILIATION_RUN
+      x-origin: new
+      x-pending: 'Non réalisable avec la spécification Wace v2.0.0 : aucune API de liste de transactions à rapprocher (voir docs/design/wace-integration.md). Le suivi se fait par interrogation de chaque ordre.'
+  /admin/reconciliation/runs/{runId}:
+    get:
+      operationId: adminGetReconciliationRun
+      tags:
+      - Administration
+      summary: Détail d'une réconciliation
+      parameters:
+      - $ref: '#/components/parameters/runId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationRunDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: RECONCILIATION_RUN
+      x-origin: new
+  /admin/reconciliation/items/{itemId}/resolve:
+    post:
+      operationId: adminResolveReconciliationItem
+      tags:
+      - Administration
+      summary: Résoudre un écart
+      parameters:
+      - $ref: '#/components/parameters/itemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveItemRequest'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: RECONCILIATION_RUN
+      x-origin: new
+  /admin/reference/sync:
+    post:
+      operationId: adminSyncReferenceData
+      tags:
+      - Administration
+      summary: Importer banques, opérateurs et libellés depuis Wace
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResult'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+      description: Importe depuis Wace les codes payeur (pays et opérateurs), les banques, relations, origines des fonds et motifs. N'active, ne désactive ni ne supprime jamais rien. Les opérateurs sans service correspondant sont listés dans `warnings`.
+  /admin/settings:
+    get:
+      operationId: adminListSettings
+      tags:
+      - Administration
+      summary: Paramètres de la plateforme
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlatformSetting'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/settings/{key}:
+    put:
+      operationId: adminUpdateSetting
+      tags:
+      - Administration
+      summary: Modifier un paramètre
+      parameters:
+      - $ref: '#/components/parameters/key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingValue'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformSetting'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /me/wallets:
+    get:
+      operationId: listWallets
+      tags:
+      - Portefeuille
+      summary: Tous mes portefeuilles (un par devise)
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Wallet'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-origin: new
+  /admin/customers/{customerId}/wallets:
+    get:
+      operationId: adminListCustomerWallets
+      tags:
+      - Administration
+      summary: Portefeuilles d'un client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Wallet'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_READ
+      x-origin: new
+  /admin/customers/{customerId}/wallet/entries:
+    get:
+      operationId: adminListCustomerWalletEntries
+      tags:
+      - Administration
+      summary: Relevé du portefeuille d'un client
+      parameters:
+      - $ref: '#/components/parameters/customerId'
+      - *id001
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: CUSTOMER_READ
+      x-origin: new
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT RS256 de courte durée (10 à 15 minutes).
+    serviceKey:
+      type: apiKey
+      in: header
+      name: X-Service-Key
+      description: Clé d'un service interne (chatbot WhatsApp).
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+      description: Numéro de page, à partir de 0.
+    Size:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        examples:
+        - createdAt,desc
+      description: champ,asc|desc
+    Search:
+      name: search
+      in: query
+      schema:
+        type: string
+        maxLength: 100
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 100
+      description: Clé choisie par le client (UUID conseillé). Un rejeu avec la même clé et le même corps renvoie le résultat initial ; un corps différent renvoie 422.
+    CountryCode:
+      name: countryCode
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/CountryCode'
+    senderId:
+      name: senderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    beneficiaryId:
+      name: beneficiaryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    destinationId:
+      name: destinationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    transferId:
+      name: transferId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    topUpId:
+      name: topUpId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    customerId:
+      name: customerId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    documentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    userId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    adjustmentId:
+      name: adjustmentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    feeScheduleId:
+      name: feeScheduleId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    runId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    itemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    PartyRole:
+      name: role
+      in: query
+      schema:
+        type: string
+        enum:
+        - SENDER
+        - BENEFICIARY
+    CustomerFilter:
+      name: customerId
+      in: query
+      schema:
+        type: string
+        format: uuid
+      description: Limiter à un client.
+    TransferStatusFilter:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+        - CREATED
+        - PAYOUT_PENDING
+        - PROCESSING
+        - COMPLETED
+        - FAILED
+        - REFUNDED
+        - CANCELLED
+    TopUpStatusFilter:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+        - PENDING
+        - PROCESSING
+        - COMPLETED
+        - FAILED
+        - CANCELLED
+        - REJECTED
+    From:
+      name: from
+      in: query
+      schema:
+        type: string
+        format: date
+      description: Date de début (incluse).
+    To:
+      name: to
+      in: query
+      schema:
+        type: string
+        format: date
+      description: Date de fin (incluse).
+    EntityType:
+      name: entityType
+      in: query
+      schema:
+        type: string
+    EntityId:
+      name: entityId
+      in: query
+      schema:
+        type: string
+    Actor:
+      name: actor
+      in: query
+      schema:
+        type: string
+        description: Courriel ou identifiant de l'auteur.
+    PartyTypePair:
+      name: partyTypePair
+      in: query
+      schema:
+        type: string
+        enum:
+        - P2P
+        - P2B
+        - B2P
+        - B2B
+      description: 'Type de transfert (expéditeur → bénéficiaire : P = personne, B = entreprise). Sans valeur : libellés communs.'
+    partyId:
+      name: partyId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    token:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+    key:
+      name: key
+      in: path
+      required: true
+      schema:
+        type: string
+    WalletCurrency:
+      name: currency
+      in: query
+      required: false
+      description: 'Devise du portefeuille (par défaut : celle du pays de résidence du client).'
+      schema:
+        $ref: '#/components/schemas/CurrencyCode'
+  responses:
+    BadRequest:
+      description: Requête mal formée.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Authentification absente ou invalide.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Droit insuffisant.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Ressource introuvable (ou appartenant à un autre client).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Conflit d'état (par exemple transition de statut interdite).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unprocessable:
+      description: Règle métier violée ou validation échouée (champ `errors`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Fichier trop volumineux.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Limite de débit atteinte (en-tête Retry-After).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    BadGateway:
+      description: Le fournisseur de paiement est injoignable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Decimal:
+      type: string
+      pattern: ^-?\d{1,15}(\.\d{1,4})?$
+      examples:
+      - '1500.00'
+      description: Décimal en chaîne (jamais un flottant).
+    CurrencyCode:
+      type: string
+      pattern: ^[A-Z]{3}$
+      examples:
+      - XAF
+      description: Code devise ISO 4217.
+    CountryCode:
+      type: string
+      pattern: ^[A-Z]{2}$
+      examples:
+      - CG
+      description: Code pays ISO 3166-1 alpha-2.
+    PhoneNumber:
+      type: string
+      pattern: ^\+[1-9][0-9]{6,14}$
+      examples:
+      - '+242061234567'
+      description: Numéro au format E.164.
+    Money:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Decimal'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+      required:
+      - amount
+      - currency
+      additionalProperties: false
+    PageMeta:
+      type: object
+      required:
+      - page
+      - size
+      - totalElements
+      - totalPages
+      properties:
+        page:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+    Problem:
+      type: object
+      description: RFC 9457 (application/problem+json).
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          examples:
+          - https://api.wtc.example/problems/insufficient-funds
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Code applicatif stable (INSUFFICIENT_FUNDS, VALIDATION_FAILED…).
+          examples:
+          - INSUFFICIENT_FUNDS
+          x-known-codes:
+          - MALFORMED_REQUEST
+          - UNAUTHENTICATED
+          - ACCESS_DENIED
+          - NOT_FOUND
+          - METHOD_NOT_ALLOWED
+          - UNSUPPORTED_MEDIA_TYPE
+          - CONFLICT
+          - VALIDATION_FAILED
+          - RATE_LIMITED
+          - INTERNAL_ERROR
+          - COUNTRY_NOT_FOUND
+          - INVALID_CREDENTIALS
+          - INVALID_MFA_CODE
+          - MFA_CODE_REJECTED
+          - INVALID_REFRESH_TOKEN
+          - REFRESH_TOKEN_REUSED
+          - INVALID_CURRENT_PASSWORD
+          - WEAK_PASSWORD
+          - EMAIL_ALREADY_REGISTERED
+          - PHONE_ALREADY_REGISTERED
+          - MFA_ALREADY_ENABLED
+          - MFA_NOT_ENROLLED
+          - USER_NOT_FOUND
+          - LAST_SUPER_ADMIN
+          - INVALID_RESET_TOKEN
+          - MFA_REQUIRED_FOR_STAFF
+          - SELF_MODIFICATION_FORBIDDEN
+          - PAYLOAD_TOO_LARGE
+          - CUSTOMER_NOT_FOUND
+          - CUSTOMER_NOT_ACTIVE
+          - PARTY_NOT_FOUND
+          - DESTINATION_NOT_FOUND
+          - KYC_DOCUMENT_NOT_FOUND
+          - KYC_DOCUMENT_ALREADY_REVIEWED
+          - KYC_LOCKED
+          - WEB_TOKEN_NOT_FOUND
+          - WEB_TOKEN_UNAVAILABLE
+          - UNSUPPORTED_FILE_TYPE
+          - EMAIL_CHANGE_UNSUPPORTED
+          - FEE_NOT_CONFIGURED
+          - EXCHANGE_RATE_UNAVAILABLE
+          - DESTINATION_NOT_SUPPORTED
+          - FEE_SCHEDULE_OVERLAP
+          - FEE_SCHEDULE_NOT_FOUND
+          - PRICING_ZONE_EXISTS
+          - EXCHANGE_RATE_EXISTS
+          - SETTING_NOT_FOUND
+          - WALLET_NOT_FOUND
+          - WALLET_NOT_ACTIVE
+          - INSUFFICIENT_FUNDS
+          - ADJUSTMENT_NOT_FOUND
+          - ADJUSTMENT_ALREADY_DECIDED
+          - FOUR_EYES_REQUIRED
+          - IDEMPOTENCY_KEY_REUSED
+          - LEDGER_CONFLICT
+          - TRANSFER_NOT_FOUND
+          - TRANSFER_NOT_REFUNDABLE
+          - KYC_REQUIRED
+          - PARTY_INCOMPLETE
+          - QUOTE_CHANGED
+          - AMOUNT_LIMIT_EXCEEDED
+          - PROVIDER_UNAVAILABLE
+        requestId:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              code:
+                type: string
+              message:
+                type: string
+            required:
+            - field
+            - message
+            additionalProperties: false
+      additionalProperties: true
+    Role:
+      type: string
+      enum:
+      - CUSTOMER
+      - SUPPORT
+      - ADMIN
+      - SUPER_ADMIN
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+      required:
+      - email
+      - password
+      - firstName
+      - lastName
+      - phone
+      - countryCode
+      additionalProperties: false
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - email
+      - password
+      additionalProperties: false
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        photoUrl:
+          type: string
+          format: uri
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+        customerId:
+          type: string
+          format: uuid
+        mfaEnabled:
+          type: boolean
+      required:
+      - id
+      - email
+      - displayName
+      - roles
+      - mfaEnabled
+      additionalProperties: false
+    TokenResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+          - Bearer
+        expiresIn:
+          type: integer
+          description: Secondes.
+        user:
+          $ref: '#/components/schemas/UserSummary'
+        documentExpired:
+          type: boolean
+          description: Pièce d'identité du client expirée.
+      required:
+      - accessToken
+      - refreshToken
+      - tokenType
+      - expiresIn
+      - user
+      additionalProperties: false
+    MfaChallenge:
+      type: object
+      properties:
+        mfaRequired:
+          type: boolean
+          enum:
+          - true
+        mfaToken:
+          type: string
+          description: Jeton court, valable uniquement pour /auth/mfa/verify.
+      required:
+      - mfaRequired
+      - mfaToken
+      additionalProperties: false
+    LoginResponse:
+      oneOf:
+      - $ref: '#/components/schemas/TokenResponse'
+      - $ref: '#/components/schemas/MfaChallenge'
+    MfaVerifyRequest:
+      type: object
+      properties:
+        mfaToken:
+          type: string
+        code:
+          type: string
+          pattern: ^\d{6}$
+      required:
+      - mfaToken
+      - code
+      additionalProperties: false
+    RefreshRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+      required:
+      - refreshToken
+      additionalProperties: false
+    PasswordResetRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+      - email
+      additionalProperties: false
+    PasswordResetConfirm:
+      type: object
+      properties:
+        token:
+          type: string
+        newPassword:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+      required:
+      - token
+      - newPassword
+      additionalProperties: false
+    ChangePasswordRequest:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          writeOnly: true
+        newPassword:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+      required:
+      - currentPassword
+      - newPassword
+      additionalProperties: false
+    MfaEnrollment:
+      type: object
+      properties:
+        secret:
+          type: string
+        otpauthUri:
+          type: string
+          format: uri
+      required:
+      - secret
+      - otpauthUri
+      additionalProperties: false
+    MfaCodeRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^\d{6}$
+      required:
+      - code
+      additionalProperties: false
+    CustomerProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+        kycStatus:
+          type: string
+          enum:
+          - NOT_SUBMITTED
+          - PENDING
+          - VERIFIED
+          - REJECTED
+          - EXPIRED
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+          - CLOSED
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - kind
+      - kycStatus
+      - status
+      additionalProperties: false
+    Me:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/UserSummary'
+        customer:
+          $ref: '#/components/schemas/CustomerProfile'
+        wallet:
+          $ref: '#/components/schemas/Wallet'
+      required:
+      - user
+      additionalProperties: false
+    UpdateProfileRequest:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+      additionalProperties: false
+      minProperties: 1
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        balance:
+          $ref: '#/components/schemas/Decimal'
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - FROZEN
+          - CLOSED
+      required:
+      - id
+      - currency
+      - balance
+      - status
+      additionalProperties: false
+    LedgerEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        occurredAt:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum:
+          - OPENING_BALANCE
+          - TOP_UP
+          - TRANSFER_DEBIT
+          - TRANSFER_REFUND
+          - ADJUSTMENT
+          - CORRECTION
+        direction:
+          type: string
+          enum:
+          - DEBIT
+          - CREDIT
+        amount:
+          $ref: '#/components/schemas/Money'
+        description:
+          type: string
+        reference:
+          type: string
+      required:
+      - id
+      - occurredAt
+      - kind
+      - direction
+      - amount
+      additionalProperties: false
+    KycDocument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentType:
+          type: string
+          enum:
+          - PASSPORT
+          - NATIONAL_ID
+          - RESIDENCE_PERMIT
+          - DRIVING_LICENSE
+          - PROOF_OF_ADDRESS
+          - SELFIE
+          - BUSINESS_REGISTRATION
+        side:
+          type: string
+          enum:
+          - FRONT
+          - BACK
+          - SINGLE
+        status:
+          type: string
+          enum:
+          - PENDING
+          - APPROVED
+          - REJECTED
+          - EXPIRED
+        expiresOn:
+          type: string
+          format: date
+        uploadedAt:
+          type: string
+          format: date-time
+        rejectionReason:
+          type: string
+        downloadUrl:
+          type: string
+          format: uri
+          description: Lien signé, durée de vie courte.
+      required:
+      - id
+      - documentType
+      - status
+      - uploadedAt
+      additionalProperties: false
+    KycStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - NOT_SUBMITTED
+          - PENDING
+          - VERIFIED
+          - REJECTED
+          - EXPIRED
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/KycDocument'
+      required:
+      - status
+      - documents
+      additionalProperties: false
+    KycReviewRequest:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum:
+          - APPROVE
+          - REJECT
+        reason:
+          type: string
+      required:
+      - decision
+      additionalProperties: false
+    IdDocument:
+      type: object
+      properties:
+        type:
+          type: string
+        numberMasked:
+          type: string
+        expiresOn:
+          type: string
+          format: date
+      additionalProperties: false
+    Party:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - SENDER
+          - BENEFICIARY
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+        idDocument:
+          $ref: '#/components/schemas/IdDocument'
+        createdAt:
+          type: string
+          format: date-time
+        pep:
+          type: boolean
+          description: Personne politiquement exposée (exigé par Wace pour l'expéditeur).
+      required:
+      - id
+      - role
+      - kind
+      additionalProperties: false
+    PartyInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+        idDocumentType:
+          type: string
+        idDocumentNumber:
+          type: string
+          writeOnly: true
+        idDocumentExpiresOn:
+          type: string
+          format: date
+        pep:
+          type: boolean
+          description: Personne politiquement exposée (exigé par Wace pour l'expéditeur).
+      required:
+      - kind
+      additionalProperties: false
+    AdminParty:
+      type: object
+      description: 'Étend Party (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - SENDER
+          - BENEFICIARY
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+        idDocument:
+          $ref: '#/components/schemas/IdDocument'
+        createdAt:
+          type: string
+          format: date-time
+        customer:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+          additionalProperties: false
+        destinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Destination'
+        pep:
+          type: boolean
+          description: Personne politiquement exposée (exigé par Wace pour l'expéditeur).
+      required:
+      - id
+      - role
+      - kind
+      additionalProperties: false
+    Destination:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - BANK_ACCOUNT
+          - MOBILE_WALLET
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        bank:
+          $ref: '#/components/schemas/Bank'
+        mobileOperator:
+          $ref: '#/components/schemas/MobileOperator'
+        accountHolderName:
+          type: string
+        accountNumberMasked:
+          type: string
+        swiftCode:
+          type: string
+        ifscCode:
+          type: string
+        routingNumber:
+          type: string
+        isDefault:
+          type: boolean
+      required:
+      - id
+      - kind
+      - countryCode
+      - accountNumberMasked
+      additionalProperties: false
+    DestinationInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+          - BANK_ACCOUNT
+          - MOBILE_WALLET
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        bankId:
+          type: integer
+          format: int64
+        mobileOperatorId:
+          type: integer
+          format: int64
+        accountHolderName:
+          type: string
+        accountNumber:
+          type: string
+          writeOnly: true
+          description: Numéro de compte ou numéro mobile.
+        swiftCode:
+          type: string
+        ifscCode:
+          type: string
+        routingNumber:
+          type: string
+        isDefault:
+          type: boolean
+      required:
+      - kind
+      - countryCode
+      - accountNumber
+      additionalProperties: false
+    TransferQuoteRequest:
+      type: object
+      properties:
+        destinationId:
+          type: string
+          format: uuid
+        sourceAmount:
+          $ref: '#/components/schemas/Decimal'
+      required:
+      - destinationId
+      - sourceAmount
+      additionalProperties: false
+    TransferQuote:
+      type: object
+      properties:
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+        fee:
+          $ref: '#/components/schemas/Money'
+        feePercent:
+          type: number
+        totalDebit:
+          $ref: '#/components/schemas/Money'
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+        fxRate:
+          type: number
+        availableBalance:
+          $ref: '#/components/schemas/Money'
+        sufficientFunds:
+          type: boolean
+      required:
+      - sourceAmount
+      - fee
+      - totalDebit
+      - sufficientFunds
+      additionalProperties: false
+    CreateTransferRequest:
+      type: object
+      properties:
+        senderId:
+          type: string
+          format: uuid
+        beneficiaryId:
+          type: string
+          format: uuid
+        destinationId:
+          type: string
+          format: uuid
+        sourceAmount:
+          $ref: '#/components/schemas/Decimal'
+        purposeCode:
+          type: string
+        sourceOfFundsCode:
+          type: string
+        relationshipCode:
+          type: string
+        comment:
+          type: string
+          maxLength: 255
+        expectedTotalDebit:
+          $ref: '#/components/schemas/Decimal'
+      required:
+      - senderId
+      - beneficiaryId
+      - destinationId
+      - sourceAmount
+      - purposeCode
+      - sourceOfFundsCode
+      - relationshipCode
+      additionalProperties: false
+    TransferSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+          enum:
+          - BANK_TRANSFER
+          - MOBILE_MONEY
+        status:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        senderName:
+          type: string
+        beneficiaryName:
+          type: string
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+        fee:
+          $ref: '#/components/schemas/Money'
+        totalDebit:
+          $ref: '#/components/schemas/Money'
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - reference
+      - kind
+      - status
+      - sourceAmount
+      - fee
+      - totalDebit
+      - createdAt
+      additionalProperties: false
+    StatusChange:
+      type: object
+      properties:
+        from:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        to:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        reason:
+          type: string
+        actor:
+          type: string
+          enum:
+          - CUSTOMER
+          - ADMIN
+          - SYSTEM
+          - PROVIDER
+        occurredAt:
+          type: string
+          format: date-time
+      required:
+      - to
+      - actor
+      - occurredAt
+      additionalProperties: false
+    Transfer:
+      type: object
+      description: 'Étend TransferSummary (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+          enum:
+          - BANK_TRANSFER
+          - MOBILE_MONEY
+        status:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        senderName:
+          type: string
+        beneficiaryName:
+          type: string
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+        fee:
+          $ref: '#/components/schemas/Money'
+        totalDebit:
+          $ref: '#/components/schemas/Money'
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        sender:
+          $ref: '#/components/schemas/Party'
+        beneficiary:
+          $ref: '#/components/schemas/Party'
+        destination:
+          $ref: '#/components/schemas/Destination'
+        fxRate:
+          type: number
+        purposeCode:
+          type: string
+        sourceOfFundsCode:
+          type: string
+        relationshipCode:
+          type: string
+        comment:
+          type: string
+        failureReason:
+          type: string
+        providerReference:
+          type: string
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusChange'
+      required:
+      - id
+      - reference
+      - kind
+      - status
+      - sourceAmount
+      - fee
+      - totalDebit
+      - createdAt
+      additionalProperties: false
+    TopUp:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        method:
+          type: string
+          enum:
+          - WACE_MOBILE_MONEY
+          - MANUAL_PROOF
+        amount:
+          $ref: '#/components/schemas/Money'
+        status:
+          type: string
+          enum:
+          - PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - CANCELLED
+          - REJECTED
+        failureReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - reference
+      - method
+      - amount
+      - status
+      - createdAt
+      additionalProperties: false
+    CreateTopUpRequest:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Decimal'
+        mobileOperatorId:
+          type: integer
+          format: int64
+        payerPhone:
+          $ref: '#/components/schemas/PhoneNumber'
+      required:
+      - amount
+      - mobileOperatorId
+      - payerPhone
+      additionalProperties: false
+    Country:
+      type: object
+      properties:
+        code:
+          $ref: '#/components/schemas/CountryCode'
+        iso3:
+          type: string
+        name:
+          type: string
+        currencyCode:
+          $ref: '#/components/schemas/CurrencyCode'
+        callingCode:
+          type: string
+        flagUrl:
+          type: string
+          format: uri
+        canSend:
+          type: boolean
+        canReceive:
+          type: boolean
+      required:
+      - code
+      - name
+      - currencyCode
+      additionalProperties: false
+    City:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+      required:
+      - id
+      - name
+      additionalProperties: false
+    Bank:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        shortCode:
+          type: string
+      required:
+      - id
+      - name
+      additionalProperties: false
+    MobileOperator:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        shortCode:
+          type: string
+        supportsPayout:
+          type: boolean
+        supportsPayin:
+          type: boolean
+      required:
+      - id
+      - name
+      additionalProperties: false
+    ReferenceValue:
+      type: object
+      properties:
+        code:
+          type: string
+        label:
+          type: string
+      required:
+      - code
+      - label
+      additionalProperties: false
+    ClientRequirements:
+      type: object
+      properties:
+        platform:
+          type: string
+          enum:
+          - ANDROID
+          - WEB
+        minimumVersion:
+          type: string
+        latestVersion:
+          type: string
+        updateUrl:
+          type: string
+          format: uri
+      required:
+      - platform
+      - minimumVersion
+      additionalProperties: false
+    WebToken:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        expiresAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - PENDING
+          - USED
+          - EXPIRED
+      required:
+      - amount
+      - countryCode
+      - expiresAt
+      - status
+      additionalProperties: false
+    ConsumeWebTokenRequest:
+      type: object
+      properties:
+        whatsappId:
+          type: string
+      required:
+      - whatsappId
+      additionalProperties: false
+    AdminCustomerSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        email:
+          type: string
+          format: email
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        kycStatus:
+          type: string
+          enum:
+          - NOT_SUBMITTED
+          - PENDING
+          - VERIFIED
+          - REJECTED
+          - EXPIRED
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+          - CLOSED
+        balance:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - displayName
+      - kind
+      - kycStatus
+      - status
+      additionalProperties: false
+    AdminCustomer:
+      type: object
+      description: 'Étend CustomerProfile (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - INDIVIDUAL
+          - BUSINESS
+        firstName:
+          type: string
+        lastName:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        businessRegisteredOn:
+          type: string
+          format: date
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        occupation:
+          type: string
+        gender:
+          type: string
+          enum:
+          - M
+          - F
+          - OTHER
+        civility:
+          type: string
+        addressLine:
+          type: string
+        city:
+          type: string
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        phone:
+          $ref: '#/components/schemas/PhoneNumber'
+        email:
+          type: string
+          format: email
+        kycStatus:
+          type: string
+          enum:
+          - NOT_SUBMITTED
+          - PENDING
+          - VERIFIED
+          - REJECTED
+          - EXPIRED
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+          - CLOSED
+        createdAt:
+          type: string
+          format: date-time
+        balance:
+          $ref: '#/components/schemas/Money'
+        transferCount:
+          type: integer
+        photoUrl:
+          type: string
+          format: uri
+      required:
+      - id
+      - kind
+      - kycStatus
+      - status
+      additionalProperties: false
+    UpdateCustomerStatusRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+          - CLOSED
+        reason:
+          type: string
+      required:
+      - status
+      additionalProperties: false
+    AdminTransferSummary:
+      type: object
+      description: 'Étend TransferSummary (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+          enum:
+          - BANK_TRANSFER
+          - MOBILE_MONEY
+        status:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        senderName:
+          type: string
+        beneficiaryName:
+          type: string
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+        fee:
+          $ref: '#/components/schemas/Money'
+        totalDebit:
+          $ref: '#/components/schemas/Money'
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        customer:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+          additionalProperties: false
+        providerReference:
+          type: string
+        failureReason:
+          type: string
+      required:
+      - id
+      - reference
+      - kind
+      - status
+      - sourceAmount
+      - fee
+      - totalDebit
+      - createdAt
+      additionalProperties: false
+    PayoutAttempt:
+      type: object
+      properties:
+        attemptNo:
+          type: integer
+        outcome:
+          type: string
+          enum:
+          - ACCEPTED
+          - REJECTED
+          - AMBIGUOUS
+          - ERROR
+        providerStatus:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+      additionalProperties: false
+    AdminTransfer:
+      type: object
+      description: 'Étend Transfer (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+          enum:
+          - BANK_TRANSFER
+          - MOBILE_MONEY
+        status:
+          type: string
+          enum:
+          - CREATED
+          - PAYOUT_PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - REFUNDED
+          - CANCELLED
+        senderName:
+          type: string
+        beneficiaryName:
+          type: string
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+        fee:
+          $ref: '#/components/schemas/Money'
+        totalDebit:
+          $ref: '#/components/schemas/Money'
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        sender:
+          $ref: '#/components/schemas/Party'
+        beneficiary:
+          $ref: '#/components/schemas/Party'
+        destination:
+          $ref: '#/components/schemas/Destination'
+        fxRate:
+          type: number
+        purposeCode:
+          type: string
+        sourceOfFundsCode:
+          type: string
+        relationshipCode:
+          type: string
+        comment:
+          type: string
+        failureReason:
+          type: string
+        providerReference:
+          type: string
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusChange'
+        customer:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+          additionalProperties: false
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PayoutAttempt'
+      required:
+      - id
+      - reference
+      - kind
+      - status
+      - sourceAmount
+      - fee
+      - totalDebit
+      - createdAt
+      additionalProperties: false
+    AdminCreateTransferRequest:
+      type: object
+      description: 'Étend CreateTransferRequest (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        senderId:
+          type: string
+          format: uuid
+        beneficiaryId:
+          type: string
+          format: uuid
+        destinationId:
+          type: string
+          format: uuid
+        sourceAmount:
+          $ref: '#/components/schemas/Decimal'
+        purposeCode:
+          type: string
+        sourceOfFundsCode:
+          type: string
+        relationshipCode:
+          type: string
+        comment:
+          type: string
+          maxLength: 255
+        expectedTotalDebit:
+          $ref: '#/components/schemas/Decimal'
+        customerId:
+          type: string
+          format: uuid
+        fundingSource:
+          type: string
+          enum:
+          - WALLET
+          - OFFLINE_RECEIPT
+        receiptReference:
+          type: string
+          description: Justificatif du paiement reçu hors plateforme.
+      required:
+      - senderId
+      - beneficiaryId
+      - destinationId
+      - sourceAmount
+      - purposeCode
+      - sourceOfFundsCode
+      - relationshipCode
+      - customerId
+      - fundingSource
+      additionalProperties: false
+    AdminTransferQuoteRequest:
+      type: object
+      description: 'Étend TransferQuoteRequest (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        destinationId:
+          type: string
+          format: uuid
+        sourceAmount:
+          $ref: '#/components/schemas/Decimal'
+        customerId:
+          type: string
+          format: uuid
+      required:
+      - destinationId
+      - sourceAmount
+      - customerId
+      additionalProperties: false
+    RefundRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 5
+      required:
+      - reason
+      additionalProperties: false
+    AdminTopUp:
+      type: object
+      description: 'Étend TopUp (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        method:
+          type: string
+          enum:
+          - WACE_MOBILE_MONEY
+          - MANUAL_PROOF
+        amount:
+          $ref: '#/components/schemas/Money'
+        status:
+          type: string
+          enum:
+          - PENDING
+          - PROCESSING
+          - COMPLETED
+          - FAILED
+          - CANCELLED
+          - REJECTED
+        failureReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        customer:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+          additionalProperties: false
+        proofDownloadUrl:
+          type: string
+          format: uri
+      required:
+      - id
+      - reference
+      - method
+      - amount
+      - status
+      - createdAt
+      additionalProperties: false
+    DecisionRequest:
+      type: object
+      properties:
+        note:
+          type: string
+      additionalProperties: false
+    RejectionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 5
+      required:
+      - reason
+      additionalProperties: false
+    BalanceAdjustment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+          additionalProperties: false
+        direction:
+          type: string
+          enum:
+          - CREDIT
+          - DEBIT
+        amount:
+          $ref: '#/components/schemas/Money'
+        reason:
+          type: string
+        status:
+          type: string
+          enum:
+          - PENDING
+          - APPROVED
+          - REJECTED
+        requestedBy:
+          type: string
+        decidedBy:
+          type: string
+        decidedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - direction
+      - amount
+      - reason
+      - status
+      - requestedBy
+      - createdAt
+      additionalProperties: false
+    CreateBalanceAdjustmentRequest:
+      type: object
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        direction:
+          type: string
+          enum:
+          - CREDIT
+          - DEBIT
+        amount:
+          $ref: '#/components/schemas/Decimal'
+        reason:
+          type: string
+          minLength: 5
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+      required:
+      - customerId
+      - direction
+      - amount
+      - reason
+      additionalProperties: false
+      description: '`currency` est facultative : par défaut, la devise du portefeuille principal du client.'
+    StaffUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+        status:
+          type: string
+          enum:
+          - PENDING_VERIFICATION
+          - ACTIVE
+          - SUSPENDED
+        mfaEnabled:
+          type: boolean
+        lastLoginAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - email
+      - displayName
+      - roles
+      - status
+      additionalProperties: false
+    CreateStaffUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+          minItems: 1
+      required:
+      - email
+      - displayName
+      - roles
+      additionalProperties: false
+    UpdateStaffUserRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+          minItems: 1
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+      additionalProperties: false
+      minProperties: 1
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        occurredAt:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        actorType:
+          type: string
+          enum:
+          - USER
+          - SYSTEM
+          - PROVIDER
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+        before:
+          type: object
+        after:
+          type: object
+        ipAddress:
+          type: string
+        requestId:
+          type: string
+      required:
+      - id
+      - occurredAt
+      - actorType
+      - action
+      - entityType
+      - entityId
+      additionalProperties: false
+    LoginAuditEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        email:
+          type: string
+        outcome:
+          type: string
+          enum:
+          - SUCCESS
+          - BAD_CREDENTIALS
+          - LOCKED
+          - MFA_REQUIRED
+          - MFA_FAILED
+          - SUSPENDED
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - email
+      - outcome
+      - occurredAt
+      additionalProperties: false
+    PricingZone:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        code:
+          type: string
+        name:
+          type: string
+        countries:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryCode'
+      required:
+      - id
+      - code
+      - name
+      additionalProperties: false
+    PricingZoneInput:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        countries:
+          type: array
+          items:
+            $ref: '#/components/schemas/CountryCode'
+      required:
+      - code
+      - name
+      additionalProperties: false
+    FeeSchedule:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        pricingZoneId:
+          type: integer
+          format: int64
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        minAmount:
+          $ref: '#/components/schemas/Decimal'
+        maxAmount:
+          $ref: '#/components/schemas/Decimal'
+        percent:
+          type: number
+          minimum: 0
+          maximum: 100
+        fixedFee:
+          $ref: '#/components/schemas/Decimal'
+        effectiveFrom:
+          type: string
+          format: date
+        effectiveTo:
+          type: string
+          format: date
+      required:
+      - id
+      - pricingZoneId
+      - currency
+      - minAmount
+      - maxAmount
+      - percent
+      - effectiveFrom
+      additionalProperties: false
+    FeeScheduleInput:
+      type: object
+      properties:
+        pricingZoneId:
+          type: integer
+          format: int64
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        minAmount:
+          $ref: '#/components/schemas/Decimal'
+        maxAmount:
+          $ref: '#/components/schemas/Decimal'
+        percent:
+          type: number
+          minimum: 0
+          maximum: 100
+        fixedFee:
+          $ref: '#/components/schemas/Decimal'
+        effectiveFrom:
+          type: string
+          format: date
+      required:
+      - pricingZoneId
+      - currency
+      - minAmount
+      - maxAmount
+      - percent
+      - effectiveFrom
+      additionalProperties: false
+    EndFeeScheduleRequest:
+      type: object
+      properties:
+        effectiveTo:
+          type: string
+          format: date
+      required:
+      - effectiveTo
+      additionalProperties: false
+    ExchangeRate:
+      type: object
+      properties:
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        quoteCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate:
+          type: number
+        effectiveFrom:
+          type: string
+          format: date-time
+        source:
+          type: string
+      required:
+      - baseCurrency
+      - quoteCurrency
+      - rate
+      - effectiveFrom
+      additionalProperties: false
+    ExchangeRateInput:
+      type: object
+      properties:
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        quoteCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate:
+          type: number
+          exclusiveMinimum: 0
+        effectiveFrom:
+          type: string
+          format: date-time
+      required:
+      - baseCurrency
+      - quoteCurrency
+      - rate
+      additionalProperties: false
+    CreateWebTokenRequest:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Decimal'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        validForMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 60
+      required:
+      - amount
+      - countryCode
+      additionalProperties: false
+    CreatedWebToken:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Affiché une seule fois.
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - token
+      - expiresAt
+      additionalProperties: false
+    AdminWebToken:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        amount:
+          $ref: '#/components/schemas/Money'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        status:
+          type: string
+          enum:
+          - PENDING
+          - USED
+          - EXPIRED
+        expiresAt:
+          type: string
+          format: date-time
+        usedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - amount
+      - countryCode
+      - status
+      - expiresAt
+      additionalProperties: false
+    ReconciliationRun:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        businessDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+          - RUNNING
+          - COMPLETED
+          - FAILED
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        matched:
+          type: integer
+        mismatches:
+          type: integer
+      required:
+      - id
+      - businessDate
+      - status
+      - startedAt
+      additionalProperties: false
+    ReconciliationItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum:
+          - MISSING_LOCAL
+          - MISSING_PROVIDER
+          - STATUS_MISMATCH
+          - AMOUNT_MISMATCH
+        transferId:
+          type: string
+          format: uuid
+        topUpId:
+          type: string
+          format: uuid
+        providerReference:
+          type: string
+        details:
+          type: object
+        resolvedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - kind
+      additionalProperties: false
+    ReconciliationRunDetail:
+      type: object
+      description: 'Étend ReconciliationRun (champs recopiés : les compositions allOf avec additionalProperties:false se contredisent).'
+      properties:
+        id:
+          type: integer
+          format: int64
+        businessDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+          - RUNNING
+          - COMPLETED
+          - FAILED
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        matched:
+          type: integer
+        mismatches:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationItem'
+      required:
+      - id
+      - businessDate
+      - status
+      - startedAt
+      additionalProperties: false
+    CreateReconciliationRequest:
+      type: object
+      properties:
+        businessDate:
+          type: string
+          format: date
+      required:
+      - businessDate
+      additionalProperties: false
+    ResolveItemRequest:
+      type: object
+      properties:
+        note:
+          type: string
+          minLength: 5
+      required:
+      - note
+      additionalProperties: false
+    PlatformSetting:
+      type: object
+      properties:
+        key:
+          type: string
+        value: {}
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+      - key
+      - value
+      additionalProperties: false
+    SettingValue:
+      type: object
+      properties:
+        value: {}
+      required:
+      - value
+      additionalProperties: false
+    SyncResult:
+      type: object
+      properties:
+        banks:
+          type: integer
+        referenceValues:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+        payerCodes:
+          type: integer
+          description: Codes payeur importés (banque par pays, opérateur mobile).
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Anomalies à traiter à la main (opérateur sans service chez Wace, liste indisponible…).
+      required:
+      - startedAt
+      additionalProperties: false
+    LedgerEntryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/LedgerEntry'
+        required:
+        - content
+      unevaluatedProperties: false
+    PartyPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/Party'
+        required:
+        - content
+      unevaluatedProperties: false
+    TransferSummaryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/TransferSummary'
+        required:
+        - content
+      unevaluatedProperties: false
+    TopUpPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/TopUp'
+        required:
+        - content
+      unevaluatedProperties: false
+    AdminCustomerSummaryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AdminCustomerSummary'
+        required:
+        - content
+      unevaluatedProperties: false
+    AdminPartyPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AdminParty'
+        required:
+        - content
+      unevaluatedProperties: false
+    AdminTransferSummaryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AdminTransferSummary'
+        required:
+        - content
+      unevaluatedProperties: false
+    AdminTopUpPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AdminTopUp'
+        required:
+        - content
+      unevaluatedProperties: false
+    BalanceAdjustmentPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/BalanceAdjustment'
+        required:
+        - content
+      unevaluatedProperties: false
+    StaffUserPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/StaffUser'
+        required:
+        - content
+      unevaluatedProperties: false
+    AuditLogEntryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AuditLogEntry'
+        required:
+        - content
+      unevaluatedProperties: false
+    LoginAuditEntryPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/LoginAuditEntry'
+        required:
+        - content
+      unevaluatedProperties: false
+    ExchangeRatePage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/ExchangeRate'
+        required:
+        - content
+      unevaluatedProperties: false
+    AdminWebTokenPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/AdminWebToken'
+        required:
+        - content
+      unevaluatedProperties: false
+    ReconciliationRunPage:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/ReconciliationRun'
+        required:
+        - content
+      unevaluatedProperties: false
+    SyncRequest:
+      type: object
+      properties:
+        providerReference:
+          type: string
+          maxLength: 100
+          description: Référence de l'ordre retrouvée dans le back-office de Wace pour un transfert bloqué en « création incertaine ».
+      additionalProperties: false

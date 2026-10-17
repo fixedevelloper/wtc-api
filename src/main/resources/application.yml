@@ -1,0 +1,120 @@
+spring:
+  application:
+    name: wtc-api
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/wtc}
+    username: ${DATABASE_USER:wtc}
+    password: ${DATABASE_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:10}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate          # le schéma appartient à Flyway ; Hibernate vérifie seulement que le mapping correspond
+    properties:
+      hibernate:
+        jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 9MB          # pièces KYC : 8 Mio utiles + marge d'enveloppe
+      max-request-size: 10MB
+  jackson:
+    default-property-inclusion: non_null   # le contrat omet les valeurs nulles
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  forward-headers-strategy: framework      # derrière un reverse proxy
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8081}          # port interne : ne pas publier hors du réseau de supervision
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.0}   # traces désactivées tant qu'un collecteur n'est pas configuré
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.wtc: INFO
+
+# Les secrets viennent exclusivement de l'environnement (voir .env.example). Aucun n'a de valeur par défaut ici.
+wtc:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  security:
+    service-key: ${WTC_SERVICE_KEY:}                         # clé du chatbot WhatsApp (en-tête X-Service-Key) ; vide = routes /api/web-tokens fermées
+    encryption-key: ${WTC_SECURITY_ENCRYPTION_KEY:}          # AES-256, 32 octets en Base64 : obligatoire (voir .env.example)
+    jwt:
+      # private-key-location et public-key-location viennent de l'environnement (WTC_SECURITY_JWT_PRIVATE_KEY_LOCATION,
+      # WTC_SECURITY_JWT_PUBLIC_KEY_LOCATION) : sans valeur par défaut, donc non définies tant qu'on ne les fournit pas.
+      # La clé privée signe les jetons ; la publique (déduite de la privée si absente) les vérifie.
+      issuer: ${WTC_SECURITY_JWT_ISSUER:wtc-api}
+      access-ttl: ${WTC_SECURITY_JWT_ACCESS_TTL:15m}
+      refresh-ttl: ${WTC_SECURITY_JWT_REFRESH_TTL:14d}
+      refresh-max-age: ${WTC_SECURITY_JWT_REFRESH_MAX_AGE:90d}
+    login:
+      max-failed-attempts: 5
+      lock-duration: 15m
+  storage:
+    endpoint: ${WTC_STORAGE_ENDPOINT:}                 # obligatoire : stockage objet S3/MinIO
+    public-endpoint: ${WTC_STORAGE_PUBLIC_ENDPOINT:}   # hôte des liens signés si différent (ex. derrière un proxy)
+    region: ${WTC_STORAGE_REGION:us-east-1}
+    bucket: ${WTC_STORAGE_BUCKET:wtc-private}
+    access-key: ${WTC_STORAGE_ACCESS_KEY:}
+    secret-key: ${WTC_STORAGE_SECRET_KEY:}
+    path-style: ${WTC_STORAGE_PATH_STYLE:true}
+    auto-create-bucket: ${WTC_STORAGE_AUTO_CREATE_BUCKET:false}
+  payment:
+    provider: ${WTC_PAYMENT_PROVIDER:}                  # obligatoire : wace (réel) ou fake (dev/tests uniquement)
+    wace:
+      base-url: ${WTC_WACE_BASE_URL:}
+      email: ${WTC_WACE_EMAIL:}
+      password: ${WTC_WACE_PASSWORD:}
+    worker:
+      enabled: ${WTC_PAYMENT_WORKER_ENABLED:true}
+  tasks:
+    enabled: ${WTC_TASKS_ENABLED:true}                         # tâches d'entretien (expiration KYC, jetons, purges)
+  notification:
+    email:
+      provider: ${WTC_NOTIFY_EMAIL_PROVIDER:}              # obligatoire : smtp | fake | disabled
+      from: ${WTC_NOTIFY_EMAIL_FROM:WTC <no-reply@wtc.example>}
+    whatsapp:
+      provider: ${WTC_NOTIFY_WHATSAPP_PROVIDER:}           # obligatoire : waba | fake | disabled
+      phone-number-id: ${WTC_WABA_PHONE_NUMBER_ID:}
+      access-token: ${WTC_WABA_ACCESS_TOKEN:}
+    telegram:
+      provider: ${WTC_NOTIFY_TELEGRAM_PROVIDER:}           # obligatoire : telegram | fake | disabled
+      bot-token: ${WTC_TELEGRAM_BOT_TOKEN:}
+      admin-chat-id: ${WTC_TELEGRAM_ADMIN_CHAT_ID:}
+    links:
+      web-base-url: ${WTC_WEB_BASE_URL:http://localhost:3000}
+    worker:
+      enabled: ${WTC_NOTIFY_WORKER_ENABLED:true}
+      ops-watcher-enabled: ${WTC_OPS_WATCHER_ENABLED:true}
+  bootstrap:
+    super-admin-email: ${WTC_BOOTSTRAP_SUPER_ADMIN_EMAIL:}
+    super-admin-password: ${WTC_BOOTSTRAP_SUPER_ADMIN_PASSWORD:}
