@@ -20,7 +20,7 @@
     <java.version>21</java.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <archunit.version>1.5.1</archunit.version>
-    <json-schema-validator.version>1.5.9</json-schema-validator.version>
+    <json-schema-validator.version>3.0.8</json-schema-validator.version>
     <spotless.version>3.10.4</spotless.version>
     <google-java-format.version>1.28.0</google-java-format.version>
     <spotbugs-plugin.version>4.10.5.0</spotbugs-plugin.version>
