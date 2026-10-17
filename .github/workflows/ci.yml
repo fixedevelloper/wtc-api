@@ -42,7 +42,7 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
 
       - name: Deploy VPS
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.5
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
