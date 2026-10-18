@@ -160,11 +160,13 @@ class JdbcAdjustmentRepository implements AdjustmentRepository {
     }
 
     @Override
-    public Page<AdjustmentView> list(String search, int page, int size, boolean newestFirst) {
+    public Page<AdjustmentView> list(
+            String search, String status, int page, int size, boolean newestFirst) {
         String order = newestFirst ? "DESC" : "ASC";
         String where =
                 " WHERE (CAST(:search AS text) IS NULL OR c.first_name ILIKE :p OR c.last_name"
-                        + " ILIKE :p OR c.business_name ILIKE :p OR a.reason ILIKE :p)";
+                        + " ILIKE :p OR c.business_name ILIKE :p OR a.reason ILIKE :p)"
+                        + " AND (CAST(:status AS text) IS NULL OR a.status = :status)";
         String pattern =
                 search == null
                         ? null
@@ -183,6 +185,7 @@ class JdbcAdjustmentRepository implements AdjustmentRepository {
                                         + order
                                         + " LIMIT :size OFFSET :offset")
                         .param("search", search)
+                        .param("status", status)
                         .param("p", pattern)
                         .param("size", size)
                         .param("offset", (long) page * size)
@@ -194,6 +197,7 @@ class JdbcAdjustmentRepository implements AdjustmentRepository {
                                         + " = a.wallet_id JOIN customers c ON c.id = w.customer_id"
                                         + where)
                         .param("search", search)
+                        .param("status", status)
                         .param("p", pattern)
                         .query(Long.class)
                         .single();

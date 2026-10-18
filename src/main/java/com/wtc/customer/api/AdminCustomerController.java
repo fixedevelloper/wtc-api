@@ -73,11 +73,18 @@ class AdminCustomerController {
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
             @RequestParam(required = false) String sort,
-            @RequestParam(required = false) @Size(max = 100) String search) {
+            @RequestParam(required = false) @Size(max = 100) String search,
+            @RequestParam(required = false) @Pattern(regexp = "ACTIVE|SUSPENDED|CLOSED")
+                    String status,
+            @RequestParam(required = false)
+                    @Pattern(regexp = "NOT_SUBMITTED|PENDING|VERIFIED|REJECTED|EXPIRED")
+                    String kycStatus) {
         PageParams order = PageParams.parse(sort, CUSTOMER_SORT, "createdAt", false);
         var result =
                 customers.list(
                         CustomerMeController.blankToNull(search),
+                        status,
+                        kycStatus,
                         page,
                         size,
                         order.field(),

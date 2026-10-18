@@ -957,6 +957,25 @@ class CustomerApiIT extends AbstractIT {
         assertThat(list.status()).isEqualTo(200);
         assertThat(list.contractViolations("adminListCustomers", 200)).isEmpty();
         assertThat(list.json().get("totalElements").asLong()).isGreaterThanOrEqualTo(1);
+        String prefix = me.email().substring(0, 8);
+        assertThat(
+                        api.get(
+                                        "/api/admin/customers?status=ACTIVE&search=" + prefix,
+                                        admin.accessToken())
+                                .json()
+                                .get("totalElements")
+                                .asLong())
+                .isGreaterThanOrEqualTo(1);
+        assertThat(
+                        api.get(
+                                        "/api/admin/customers?status=SUSPENDED&search=" + prefix,
+                                        admin.accessToken())
+                                .json()
+                                .get("totalElements")
+                                .asLong())
+                .isZero();
+        assertThat(api.get("/api/admin/customers?kycStatus=NOPE", admin.accessToken()).status())
+                .isEqualTo(422);
         assertThat(
                         api.get("/api/admin/customers/" + me.customerId(), admin.accessToken())
                                 .contractViolations("adminGetCustomer", 200))

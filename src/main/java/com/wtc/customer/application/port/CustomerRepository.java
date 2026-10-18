@@ -19,6 +19,13 @@ public interface CustomerRepository {
 
     void setKycStatus(long id, String status);
 
+    /** Filtres facultatifs : {@code status} (compte) et {@code kycStatus} (identité). */
     Paged<AdminCustomerSummary> search(
-            String search, int page, int size, String sortField, boolean ascending);
+            String search,
+            String status,
+            String kycStatus,
+            int page,
+            int size,
+            String sortField,
+            boolean ascending);
 }

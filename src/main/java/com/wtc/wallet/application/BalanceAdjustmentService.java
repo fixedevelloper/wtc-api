@@ -51,8 +51,9 @@ public class BalanceAdjustmentService {
 
     @PreAuthorize("hasAuthority('BALANCE_ADJUST_REQUEST')")
     @Transactional(readOnly = true)
-    public Page<AdjustmentView> list(String search, int page, int size, boolean newestFirst) {
-        return adjustments.list(search, page, size, newestFirst);
+    public Page<AdjustmentView> list(
+            String search, String status, int page, int size, boolean newestFirst) {
+        return adjustments.list(search, status, page, size, newestFirst);
     }
 
     /**

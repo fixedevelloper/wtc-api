@@ -516,6 +516,18 @@ class WalletApiIT extends AbstractIT {
         assertThat(list.json().get("totalElements").asLong()).isEqualTo(1);
         assertThat(list.json().get("content").get(0).get("amount").get("currency").asString())
                 .isEqualTo("EUR");
+
+        Reply pending =
+                api.get("/api/admin/balance-adjustments?status=PENDING", admin.accessToken());
+        assertThat(pending.status()).isEqualTo(200);
+        assertThat(pending.json().get("totalElements").asLong()).isGreaterThanOrEqualTo(1);
+        Reply approved =
+                api.get("/api/admin/balance-adjustments?status=APPROVED", admin.accessToken());
+        assertThat(approved.json().get("totalElements").asLong()).isZero();
+        assertThat(
+                        api.get("/api/admin/balance-adjustments?status=NOPE", admin.accessToken())
+                                .status())
+                .isEqualTo(422);
     }
 
     @Test

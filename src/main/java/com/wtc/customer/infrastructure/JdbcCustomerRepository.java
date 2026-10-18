@@ -131,11 +131,18 @@ class JdbcCustomerRepository implements CustomerRepository {
 
     @Override
     public Paged<AdminCustomerSummary> search(
-            String search, int page, int size, String sortField, boolean ascending) {
+            String search,
+            String status,
+            String kycStatus,
+            int page,
+            int size,
+            String sortField,
+            boolean ascending) {
         String where =
                 " WHERE (CAST(:search AS text) IS NULL OR c.first_name ILIKE :p OR c.last_name"
                     + " ILIKE :p OR c.business_name ILIKE :p OR c.email ILIKE :p OR c.phone_e164"
-                    + " ILIKE :p)";
+                    + " ILIKE :p) AND (CAST(:status AS text) IS NULL OR c.status = :status) AND"
+                    + " (CAST(:kyc AS text) IS NULL OR c.kyc_status = :kyc)";
         String pattern =
                 search == null
                         ? null
@@ -152,12 +159,18 @@ class JdbcCustomerRepository implements CustomerRepository {
                 jdbc.sql(
                                 "SELECT c.public_id, c.kind, c.first_name, c.last_name,"
                                         + " c.business_name, c.email, c.phone_e164, c.country_code,"
-                                        + " c.kyc_status, c.status, c.created_at FROM customers c"
+                                        + " c.kyc_status, c.status, c.created_at, w.balance,"
+                                        + " w.currency_code FROM customers c LEFT JOIN LATERAL"
+                                        + " (SELECT balance, currency_code FROM wallets WHERE"
+                                        + " customer_id = c.id ORDER BY (currency_code = 'XAF')"
+                                        + " DESC, id LIMIT 1) w ON true"
                                         + where
                                         + " ORDER BY "
                                         + order
                                         + " LIMIT :size OFFSET :offset")
                         .param("search", search)
+                        .param("status", status)
+                        .param("kyc", kycStatus)
                         .param("p", pattern)
                         .param("size", size)
                         .param("offset", (long) page * size)
@@ -176,12 +189,21 @@ class JdbcCustomerRepository implements CustomerRepository {
                                                 rs.getString("country_code"),
                                                 rs.getString("kyc_status"),
                                                 rs.getString("status"),
+                                                rs.getBigDecimal("balance") == null
+                                                        ? null
+                                                        : new AdminCustomerSummary.Balance(
+                                                                rs.getBigDecimal("balance")
+                                                                        .toPlainString(),
+                                                                rs.getString("currency_code")
+                                                                        .strip()),
                                                 rs.getObject("created_at", OffsetDateTime.class)
                                                         .toInstant()))
                         .list();
         long total =
                 jdbc.sql("SELECT count(*) FROM customers c" + where)
                         .param("search", search)
+                        .param("status", status)
+                        .param("kyc", kycStatus)
                         .param("p", pattern)
                         .query(Long.class)
                         .single();

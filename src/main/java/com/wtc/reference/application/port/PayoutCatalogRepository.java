@@ -26,6 +26,12 @@ public interface PayoutCatalogRepository {
 
     java.util.List<OperatorRef> operatorsOf(String countryCode);
 
+    /**
+     * Crée l'opérateur mobile d'un service Wace s'il n'existe pas déjà (même code court ou même nom
+     * dans le pays). Renvoie vrai s'il a été créé ; un opérateur existant n'est jamais modifié.
+     */
+    boolean ensureOperator(String countryCode, String shortCode, String name);
+
     void setBankPayerCode(String countryCode, String payerCode);
 
     void setOperatorPayerCode(long operatorId, String payerCode);

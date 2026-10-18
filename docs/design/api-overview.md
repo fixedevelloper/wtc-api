@@ -1,6 +1,6 @@
 # Vue d'ensemble de l'API
 
-Générée depuis [`api/openapi.yaml`](../../api/openapi.yaml) — **100 opérations**, base `/api`. Ne pas modifier à la main : `python3 tools/api_docs.py`.
+Générée depuis [`api/openapi.yaml`](../../api/openapi.yaml) — **107 opérations**, base `/api`. Ne pas modifier à la main : `python3 tools/api_docs.py`.
 
 Légende : **Accès** = qui peut appeler ; **Idem.** = en-tête `Idempotency-Key` obligatoire ; **Origine** = *existante* (remplace une route Symfony) ou *nouvelle*.
 
@@ -130,6 +130,8 @@ Légende : **Accès** = qui peut appeler ; **Idem.** = en-tête `Idempotency-Key
 | POST | `/api/admin/users/{userId}/mfa-reset` | Réinitialiser la 2FA d'un compte | `USER_MANAGE` |  | nouvelle |
 | GET | `/api/admin/audit-logs` | Journal d'audit | `AUDIT_READ` |  | existante |
 | GET | `/api/admin/login-audits` | Journal des connexions | `AUDIT_READ` |  | existante |
+| POST | `/api/admin/countries` | Ajouter un pays | `REFERENCE_WRITE` |  | nouvelle |
+| POST | `/api/admin/countries/{countryCode}/cities` | Ajouter une ville à un pays | `REFERENCE_WRITE` |  | nouvelle |
 | GET | `/api/admin/pricing-zones` | Zones tarifaires | `REFERENCE_WRITE` |  | existante |
 | POST | `/api/admin/pricing-zones` | Créer une zone tarifaire | `REFERENCE_WRITE` |  | existante |
 | GET | `/api/admin/fee-schedules` | Barèmes de frais | `REFERENCE_WRITE` |  | existante |
@@ -137,6 +139,7 @@ Légende : **Accès** = qui peut appeler ; **Idem.** = en-tête `Idempotency-Key
 | PATCH | `/api/admin/fee-schedules/{feeScheduleId}` | Clôturer une tranche | `REFERENCE_WRITE` |  | nouvelle |
 | GET | `/api/admin/exchange-rates` | Taux de change | `REFERENCE_WRITE` |  | nouvelle |
 | POST | `/api/admin/exchange-rates` | Publier un taux | `REFERENCE_WRITE` |  | nouvelle |
+| GET | `/api/admin/dashboard` | Chiffres du tableau de bord | `TRANSFER_READ` |  | nouvelle |
 | GET | `/api/admin/web-tokens` | Jetons web | `TRANSFER_CREATE` |  | existante |
 | POST | `/api/admin/web-tokens` | Créer un jeton web | `TRANSFER_CREATE` |  | existante |
 | GET | `/api/admin/reconciliation/runs` | Réconciliations avec Wace | `RECONCILIATION_RUN` |  | nouvelle |
@@ -144,6 +147,10 @@ Légende : **Accès** = qui peut appeler ; **Idem.** = en-tête `Idempotency-Key
 | GET | `/api/admin/reconciliation/runs/{runId}` | Détail d'une réconciliation | `RECONCILIATION_RUN` |  | nouvelle |
 | POST | `/api/admin/reconciliation/items/{itemId}/resolve` | Résoudre un écart | `RECONCILIATION_RUN` |  | nouvelle |
 | POST | `/api/admin/reference/sync` | Importer banques, opérateurs et libellés depuis Wace | `REFERENCE_WRITE` |  | nouvelle |
+| GET | `/api/admin/reference/sync-overview` | État de la connexion Wace et couverture des référentiels | `REFERENCE_WRITE` |  | nouvelle |
+| GET | `/api/admin/reference/sync-jobs` | Imports Wace récents | `REFERENCE_WRITE` |  | nouvelle |
+| POST | `/api/admin/reference/sync-jobs` | Lancer un import Wace en arrière-plan | `REFERENCE_WRITE` |  | nouvelle |
+| GET | `/api/admin/reference/sync-jobs/{jobId}` | Avancement d'un import Wace | `REFERENCE_WRITE` |  | nouvelle |
 | GET | `/api/admin/settings` | Paramètres de la plateforme | `REFERENCE_WRITE` |  | nouvelle |
 | PUT | `/api/admin/settings/{key}` | Modifier un paramètre | `REFERENCE_WRITE` |  | nouvelle |
 | GET | `/api/admin/customers/{customerId}/wallets` | Portefeuilles d'un client | `CUSTOMER_READ` |  | nouvelle |

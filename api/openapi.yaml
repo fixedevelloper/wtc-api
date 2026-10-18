@@ -1473,6 +1473,26 @@ paths:
       - $ref: '#/components/parameters/Size'
       - $ref: '#/components/parameters/Sort'
       - $ref: '#/components/parameters/Search'
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - SUSPENDED
+          - CLOSED
+      - name: kycStatus
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - NOT_SUBMITTED
+          - PENDING
+          - VERIFIED
+          - REJECTED
+          - EXPIRED
       responses:
         '200':
           description: Succès.
@@ -2031,6 +2051,15 @@ paths:
       - $ref: '#/components/parameters/Size'
       - $ref: '#/components/parameters/Sort'
       - $ref: '#/components/parameters/Search'
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - PENDING
+          - APPROVED
+          - REJECTED
       responses:
         '200':
           description: Succès.
@@ -2318,6 +2347,74 @@ paths:
       x-origin: existing
       x-replaces:
       - GET /v2/admin/connexions
+  /admin/countries:
+    post:
+      operationId: adminCreateCountry
+      tags:
+      - Administration
+      summary: Ajouter un pays
+      description: Un pays qui reçoit des transferts (`canReceive`) est ensuite complété par l'import Wace (code payeur, banques, opérateurs mobiles).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CountryInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Country'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/countries/{countryCode}/cities:
+    post:
+      operationId: adminAddCity
+      tags:
+      - Administration
+      summary: Ajouter une ville à un pays
+      description: Wace ne fournit pas les villes, elles se saisissent ici.
+      parameters:
+      - $ref: '#/components/parameters/CountryCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CityInput'
+      responses:
+        '201':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/City'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
   /admin/pricing-zones:
     get:
       operationId: adminListPricingZones
@@ -2515,6 +2612,37 @@ paths:
           $ref: '#/components/responses/Conflict'
       x-required-permission: REFERENCE_WRITE
       x-origin: new
+  /admin/dashboard:
+    get:
+      operationId: adminDashboard
+      tags:
+      - Administration
+      summary: Chiffres du tableau de bord
+      description: 'Agrégats des 12 derniers mois civils (UTC) dans une seule devise, sans conversion : volumes et frais
+        des transferts terminés, recharges terminées, nouveaux clients, plus les totaux courants.'
+      parameters:
+      - name: currency
+        in: query
+        required: false
+        schema:
+          type: string
+          pattern: ^[A-Z]{3}$
+          default: XAF
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboard'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      x-required-permission: TRANSFER_READ
+      x-origin: new
   /admin/web-tokens:
     get:
       operationId: adminListWebTokens
@@ -2686,6 +2814,13 @@ paths:
       tags:
       - Administration
       summary: Importer banques, opérateurs et libellés depuis Wace
+      parameters:
+      - name: countryCode
+        in: query
+        required: false
+        description: Limiter l'import à un pays (qui doit recevoir des transferts). Sans valeur, tous les pays récepteurs.
+        schema:
+          $ref: '#/components/schemas/CountryCode'
       responses:
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -2697,11 +2832,117 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
         '502':
           $ref: '#/components/responses/BadGateway'
       x-required-permission: REFERENCE_WRITE
       x-origin: new
-      description: Importe depuis Wace les codes payeur (pays et opérateurs), les banques, relations, origines des fonds et motifs. N'active, ne désactive ni ne supprime jamais rien. Les opérateurs sans service correspondant sont listés dans `warnings`.
+      description: Importe depuis Wace les codes payeur (pays et opérateurs), les banques, les opérateurs mobiles qui manquent (créés d'après les services de Wace), relations, origines des fonds et motifs. N'active, ne désactive ni ne supprime jamais rien. Les opérateurs sans service correspondant sont listés dans `warnings`.
+  /admin/reference/sync-overview:
+    get:
+      operationId: adminSyncOverview
+      tags:
+      - Administration
+      summary: État de la connexion Wace et couverture des référentiels
+      description: Fournisseur actif, couverture par pays récepteur (code payeur, banques, opérateurs) et date du dernier import.
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/reference/sync-jobs:
+    get:
+      operationId: adminListSyncJobs
+      tags:
+      - Administration
+      summary: Imports Wace récents
+      description: Les dix derniers, le plus récent d'abord. Conservés en mémoire, ils disparaissent au redémarrage de l'API.
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+    post:
+      operationId: adminStartSyncJob
+      tags:
+      - Administration
+      summary: Lancer un import Wace en arrière-plan
+      description: Un seul import à la fois. Suivre l'avancement avec `GET /admin/reference/sync-jobs/{jobId}`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartSyncRequest'
+      responses:
+        '202':
+          description: Import démarré.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
+  /admin/reference/sync-jobs/{jobId}:
+    get:
+      operationId: adminGetSyncJob
+      tags:
+      - Administration
+      summary: Avancement d'un import Wace
+      parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Succès.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-required-permission: REFERENCE_WRITE
+      x-origin: new
   /admin/settings:
     get:
       operationId: adminListSettings
@@ -3262,6 +3503,10 @@ components:
           - FEE_SCHEDULE_OVERLAP
           - FEE_SCHEDULE_NOT_FOUND
           - PRICING_ZONE_EXISTS
+          - COUNTRY_EXISTS
+          - CITY_EXISTS
+          - SYNC_ALREADY_RUNNING
+          - SYNC_JOB_NOT_FOUND
           - EXCHANGE_RATE_EXISTS
           - SETTING_NOT_FOUND
           - WALLET_NOT_FOUND
@@ -4301,6 +4546,7 @@ components:
           enum:
           - WACE_MOBILE_MONEY
           - MANUAL_PROOF
+          - LEGACY
         amount:
           $ref: '#/components/schemas/Money'
         status:
@@ -4367,6 +4613,215 @@ components:
       - code
       - name
       - currencyCode
+      additionalProperties: false
+    CountryInput:
+      type: object
+      properties:
+        code:
+          $ref: '#/components/schemas/CountryCode'
+        iso3:
+          type: string
+          pattern: ^[A-Za-z]{3}$
+        name:
+          type: string
+        currencyCode:
+          $ref: '#/components/schemas/CurrencyCode'
+        callingCode:
+          type: string
+          pattern: ^\+\d{1,4}$
+        flagUrl:
+          type: string
+          format: uri
+        pricingZoneId:
+          type: integer
+          format: int64
+          description: Zone tarifaire (barème de frais) du pays.
+        canSend:
+          type: boolean
+          default: false
+        canReceive:
+          type: boolean
+          default: false
+      required:
+      - code
+      - iso3
+      - name
+      - currencyCode
+      additionalProperties: false
+    StartSyncRequest:
+      type: object
+      properties:
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+      additionalProperties: false
+    SyncJobCountry:
+      type: object
+      properties:
+        code:
+          $ref: '#/components/schemas/CountryCode'
+        status:
+          type: string
+          enum:
+          - PENDING
+          - RUNNING
+          - OK
+          - PARTIAL
+          - FAILED
+        banks:
+          type: integer
+        operators:
+          type: integer
+        payerCodes:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+      - code
+      - status
+      - banks
+      - operators
+      - payerCodes
+      - warnings
+      additionalProperties: false
+    SyncJob:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum:
+          - RUNNING
+          - SUCCEEDED
+          - FAILED
+        country:
+          $ref: '#/components/schemas/CountryCode'
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        totalSteps:
+          type: integer
+          description: Un pas par pays, plus un pour les libellés.
+        doneSteps:
+          type: integer
+        current:
+          type: string
+        countries:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncJobCountry'
+        labels:
+          type: string
+          enum:
+          - PENDING
+          - RUNNING
+          - OK
+          - PARTIAL
+        referenceValues:
+          type: integer
+        banks:
+          type: integer
+        operators:
+          type: integer
+        payerCodes:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
+      required:
+      - id
+      - status
+      - startedAt
+      - totalSteps
+      - doneSteps
+      - current
+      - countries
+      - labels
+      - referenceValues
+      - banks
+      - operators
+      - payerCodes
+      - warnings
+      additionalProperties: false
+    SyncOverview:
+      type: object
+      properties:
+        provider:
+          type: object
+          properties:
+            name:
+              type: string
+              description: '`wace` (réel) ou `fake` (développement).'
+            host:
+              type: string
+            configured:
+              type: boolean
+              description: Adresse et identifiants Wace renseignés.
+          required:
+          - name
+          - configured
+          additionalProperties: false
+        countries:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                $ref: '#/components/schemas/CountryCode'
+              name:
+                type: string
+              currency:
+                $ref: '#/components/schemas/CurrencyCode'
+              bankPayerCode:
+                type: boolean
+              banks:
+                type: integer
+              operators:
+                type: integer
+              operatorsWithoutPayerCode:
+                type: integer
+            required:
+            - code
+            - name
+            - currency
+            - bankPayerCode
+            - banks
+            - operators
+            - operatorsWithoutPayerCode
+            additionalProperties: false
+        referenceValues:
+          type: integer
+        lastSync:
+          type: object
+          properties:
+            at:
+              type: string
+              format: date-time
+            actor:
+              type: string
+          required:
+          - at
+          additionalProperties: false
+      required:
+      - provider
+      - countries
+      - referenceValues
+      additionalProperties: false
+    CityInput:
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
       additionalProperties: false
     City:
       type: object
@@ -4874,6 +5329,7 @@ components:
           enum:
           - WACE_MOBILE_MONEY
           - MANUAL_PROOF
+          - LEGACY
         amount:
           $ref: '#/components/schemas/Money'
         status:
@@ -5486,6 +5942,9 @@ components:
       properties:
         banks:
           type: integer
+        operators:
+          type: integer
+          description: Opérateurs mobiles créés d'après les services de Wace (ceux qui existaient déjà ne sont pas comptés).
         referenceValues:
           type: integer
         startedAt:
@@ -5658,6 +6117,59 @@ components:
         required:
         - content
       unevaluatedProperties: false
+    AdminDashboard:
+      type: object
+      required: [currency, generatedAt, months, customers, activeCustomers, walletBalance, pendingTopUps, transfersByStatus]
+      properties:
+        currency:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        months:
+          type: array
+          description: Du mois le plus ancien au mois courant.
+          items:
+            $ref: '#/components/schemas/AdminDashboardMonth'
+        customers:
+          type: integer
+          format: int64
+        activeCustomers:
+          type: integer
+          format: int64
+        walletBalance:
+          type: string
+          description: Somme des soldes des portefeuilles dans la devise (chaîne décimale).
+        pendingTopUps:
+          type: integer
+          format: int64
+        transfersByStatus:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    AdminDashboardMonth:
+      type: object
+      required: [month, transferVolume, transferCount, fees, topUpVolume, topUpCount, newCustomers]
+      properties:
+        month:
+          type: string
+          example: 2026-10
+        transferVolume:
+          type: string
+        transferCount:
+          type: integer
+          format: int64
+        fees:
+          type: string
+        topUpVolume:
+          type: string
+        topUpCount:
+          type: integer
+          format: int64
+        newCustomers:
+          type: integer
+          format: int64
     AdminWebTokenPage:
       allOf:
       - $ref: '#/components/schemas/PageMeta'

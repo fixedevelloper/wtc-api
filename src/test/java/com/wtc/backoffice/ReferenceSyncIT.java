@@ -67,6 +67,7 @@ class ReferenceSyncIT extends AbstractIT {
         jdbc.sql("UPDATE countries SET wace_bank_payer_code = NULL").update();
         jdbc.sql("UPDATE mobile_operators SET wace_payer_code = NULL").update();
         jdbc.sql("DELETE FROM banks WHERE wace_bank_id IS NOT NULL").update();
+        jdbc.sql("DELETE FROM mobile_operators WHERE short_code = 'NEWM'").update();
         // Pays récepteur de test : YY (opérateurs « Mobile YY » / « MYY » et « Mobile sans envoi »
         // / « MNP »).
         fake.offerServices(
@@ -192,6 +193,58 @@ class ReferenceSyncIT extends AbstractIT {
                                 .query(String.class)
                                 .single())
                 .isEqualTo("Afriland First Bank");
+    }
+
+    @Test
+    void importsASingleCountryAndCreatesTheOperatorsWaceOffersButWeLack() {
+        String t = Sessions.staff(api, fx, clock, Role.ADMIN).accessToken();
+        fake.offerServices(
+                "YY",
+                List.of(
+                        new PayoutService("B", "BANKS DEPOSIT", "XOF"),
+                        new PayoutService("MYY", "MOBILE YY", "XOF"),
+                        new PayoutService("NEWM", "New Money", "XOF")),
+                List.of(new ProviderBank(1, "10001", "BICEC")));
+
+        Reply reply = api.post("/api/admin/reference/sync?countryCode=YY", null, t);
+
+        assertThat(reply.status()).isEqualTo(200);
+        assertThat(reply.contractViolations("adminSyncReferenceData", 200)).isEmpty();
+        assertThat(reply.json().get("operators").asInt()).isEqualTo(1);
+        assertThat(
+                        jdbc.sql(
+                                        "SELECT wace_payer_code FROM mobile_operators WHERE"
+                                                + " country_code = 'YY' AND short_code = 'NEWM'")
+                                .query(String.class)
+                                .single())
+                .isEqualTo("PC-YY-NEWM");
+        assertThat(fake.countCalls("payoutServices")).as("un seul pays interrogé").isEqualTo(1);
+
+        assertThat(
+                        api.post("/api/admin/reference/sync?countryCode=YY", null, t)
+                                .json()
+                                .get("operators")
+                                .asInt())
+                .as("second passage : rien à créer")
+                .isZero();
+        assertThat(
+                        jdbc.sql(
+                                        "SELECT count(*) FROM mobile_operators WHERE country_code ="
+                                                + " 'YY' AND short_code = 'NEWM'")
+                                .query(Long.class)
+                                .single())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void anUnknownOrNonReceivingCountryIsRefusedBeforeAnyProviderCall() {
+        String t = Sessions.staff(api, fx, clock, Role.ADMIN).accessToken();
+
+        Reply reply = api.post("/api/admin/reference/sync?countryCode=QQ", null, t);
+
+        assertThat(reply.status()).isEqualTo(404);
+        assertThat(reply.contractViolations("adminSyncReferenceData", 404)).isEmpty();
+        assertThat(fake.countCalls("payoutServices")).isZero();
     }
 
     @Test

@@ -80,6 +80,25 @@ class JdbcPayoutCatalogRepository implements PayoutCatalogRepository {
     }
 
     @Override
+    public boolean ensureOperator(String countryCode, String shortCode, String name) {
+        return jdbc.sql(
+                                """
+                                INSERT INTO mobile_operators (country_code, name, short_code)
+                                SELECT :c, :n, :code
+                                WHERE NOT EXISTS (
+                                    SELECT 1 FROM mobile_operators
+                                    WHERE country_code = :c
+                                      AND (upper(short_code) = upper(:code)
+                                           OR upper(btrim(name)) = upper(btrim(:n))))
+                                """)
+                        .param("c", countryCode)
+                        .param("n", name)
+                        .param("code", shortCode)
+                        .update()
+                > 0;
+    }
+
+    @Override
     public java.util.List<OperatorRef> operatorsOf(String countryCode) {
         return jdbc.sql(
                         "SELECT id, short_code, name FROM mobile_operators WHERE country_code = :c"

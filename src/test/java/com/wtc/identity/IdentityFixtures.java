@@ -89,6 +89,7 @@ public final class IdentityFixtures {
                 .update();
         jdbc.sql("DELETE FROM ledger_accounts WHERE kind = 'CUSTOMER_WALLET' OR code LIKE '%.%'")
                 .update();
+        jdbc.sql("DELETE FROM top_ups").update();
         jdbc.sql("DELETE FROM wallets").update();
         jdbc.sql("DELETE FROM provider_party_refs").update();
         jdbc.sql("DELETE FROM payout_destinations").update();

@@ -26,6 +26,10 @@ public enum ErrorCode {
 
     // Référentiels
     COUNTRY_NOT_FOUND(HttpStatus.NOT_FOUND, "Pays introuvable"),
+    COUNTRY_EXISTS(HttpStatus.CONFLICT, "Pays déjà enregistré"),
+    CITY_EXISTS(HttpStatus.CONFLICT, "Ville déjà enregistrée"),
+    SYNC_ALREADY_RUNNING(HttpStatus.CONFLICT, "Import déjà en cours"),
+    SYNC_JOB_NOT_FOUND(HttpStatus.NOT_FOUND, "Import introuvable"),
 
     // Portefeuilles et grand livre
     WALLET_NOT_FOUND(HttpStatus.NOT_FOUND, "Portefeuille introuvable"),

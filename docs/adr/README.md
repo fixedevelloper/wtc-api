@@ -1,4 +1,4 @@
-# Décisions d'architecture (ADR)
+    # Décisions d'architecture (ADR)
 
 Une décision structurante = un fichier. Statut **Proposé** tant que les hypothèses de [assumptions.md](../design/assumptions.md) ne sont pas confirmées.
 

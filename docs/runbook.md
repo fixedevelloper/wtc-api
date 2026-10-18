@@ -32,12 +32,43 @@ docker compose --env-file .env.prod -f compose.prod.yaml up -d      # premier d�
 
 **À savoir**
 
-- L'API n'écoute qu'en `127.0.0.1:8080` : un reverse proxy TLS (Caddy, Nginx, Traefik) doit être placé devant. Le port de supervision 8081 n'est jamais publié.
+- L'API n'écoute qu'en `127.0.0.1:8080` (changer avec `WTC_HOST_PORT` dans `.env.prod` si un autre service occupe déjà 8080 : `sudo ss -ltnp | grep :8080`) : un reverse proxy TLS (Caddy, Nginx, Traefik) doit être placé devant. Le port de supervision 8081 n'est jamais publié.
 - PostgreSQL n'est joignable que depuis le réseau interne du compose. Flyway applique les migrations au démarrage.
 - Le stockage objet est **externe** (S3 ou équivalent) ; le bucket est créé par l'infrastructure, jamais par l'application.
 - **Retour arrière** : mettre un tag `<sha>` précédent dans `WTC_IMAGE` (`.env.prod`) puis `docker compose … pull api && docker compose … up -d api`. Les migrations Flyway ne reculent pas : une migration déjà appliquée doit rester compatible avec la version précédente.
 - `WTC_PAYMENT_PROVIDER` et les canaux de notification ne doivent jamais valoir `fake`. Déclarer l'IP de sortie du serveur à Wace avant le premier transfert réel (voir « Mise en service du fournisseur »).
 - Sauvegarder ensemble la base, le bucket et `WTC_SECURITY_ENCRYPTION_KEY` (à part).
+
+## Reverse proxy nginx et certificat TLS (certbot)
+
+Pré-requis : un enregistrement DNS `A` du domaine vers l'IP du serveur (`dig +short <domaine>`), les ports 80 et 443 ouverts. Dans les commandes, remplacer `DOMAINE` (ex. `wtc.api.digitagateway.com`) et `vous@exemple.com`. Le fichier `deploy/nginx/wtc-api.conf` est un vhost HTTP classique : `certbot --nginx` y ajoute lui-même le HTTPS et la redirection.
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+
+# 1. vhost HTTP (un seul fichier par domaine)
+sudo sed 's/api.example.com/DOMAINE/g' deploy/nginx/wtc-api.conf | sudo tee /etc/nginx/sites-available/DOMAINE.conf >/dev/null
+sudo ln -sf /etc/nginx/sites-available/DOMAINE.conf /etc/nginx/sites-enabled/DOMAINE.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 2. certificat Let's Encrypt + HTTPS + redirection : certbot modifie le fichier ci-dessus
+sudo certbot --nginx -d wtc.api.digitagateway.com
+
+# 3. le renouvellement est automatique (minuteur systemd de certbot, deux fois par jour) : le vérifier une fois
+sudo certbot renew --dry-run
+curl -I https://DOMAINE/api/meta/client-requirements      # doit répondre 200
+```
+
+- **IP du client (sécurité)** : l'API prend la première adresse de `X-Forwarded-For` comme IP du client (journal de connexion, limiteur de débit, verrouillage). Le proxy doit donc **écraser** cet en-tête (`proxy_set_header X-Forwarded-For $remote_addr;`, comme dans `wtc-api.conf`) et **jamais** le compléter avec `$proxy_add_x_forwarded_for` : sinon un client envoie `X-Forwarded-For: 9.9.9.9` et l'API enregistre 9.9.9.9 (vérifié), ce qui contourne les limites par IP. Pour la même raison, le port de l'API ne doit pas être joignable sans passer par le proxy.
+- **Après certbot, le fichier du serveur contient le HTTPS** : pour modifier la configuration, éditer le fichier de `/etc/nginx/sites-available/` ; ne pas le réécraser avec la copie du dépôt (les lignes de certificat et la redirection disparaîtraient).
+- **Un seul vhost par domaine** : deux fichiers qui déclarent le même `server_name` (`sites-enabled/` et `conf.d/`) provoquent des blocs ignorés ; les repérer avec `sudo nginx -T | grep -n "server_name DOMAINE"`.
+- **Port 8080 déjà pris** par un autre service (`sudo ss -ltnp | grep :8080`) : mettre `WTC_HOST_PORT=8090` dans `.env.prod` et adapter les deux `proxy_pass` de nginx.
+- **Renouvellement** : certbot renouvelle seul à 30 jours de l'échéance (validation par nginx, port 80) et recharge nginx. Contrôler de temps en temps avec `sudo certbot certificates`.
+- **`unknown directive …` ou autre erreur de `nginx -t`** : certbot lance `nginx -t` avant tout et s'arrête si la configuration est invalide. Corriger le fichier (`sudo nginx -t` donne la ligne), puis relancer.
+- **Si `/etc/letsencrypt/live/DOMAINE/` existe déjà** (clé ou CSR générés à la main lors d'un essai), certbot refuse de créer le certificat : supprimer ce dossier d'essai (`sudo rm -rf /etc/letsencrypt/live/DOMAINE`).
+- **Échec de validation** : vérifier que le DNS pointe bien vers ce serveur, que le port 80 est joignable depuis l'extérieur (pare-feu du serveur et du fournisseur) et que `server_name` est bien le domaine demandé.
+- La ligne `X-Robots-Tag "noindex, nofollow"` convient à une recette ; la retirer pour la production.
+- Un certificat d'une autre autorité ou auto-signé (essais uniquement : Android le refuse) se place dans `/etc/letsencrypt/live/DOMAINE/` sous les noms `fullchain.pem` (certificat **puis** chaîne intermédiaire) et `privkey.pem` (droits `600`, jamais dans le dépôt), puis se référence dans le vhost (`ssl_certificate`, `ssl_certificate_key`) ; vérifier que la clé correspond : `openssl x509 -in fullchain.pem -noout -pubkey | sha256sum` et `openssl pkey -in privkey.pem -pubout | sha256sum` doivent donner la même empreinte.
 
 ## Variables d'environnement
 
@@ -73,7 +104,7 @@ Les secrets (mot de passe de base, clés) passent **uniquement** par l'environne
 | `/actuator/health/readiness` | Sonde de disponibilité, vérifie la base (retirer de la rotation si KO) |
 | `/actuator/prometheus` | Métriques (latences HTTP, JVM, pool de connexions) |
 
-Sur le port public, seuls `health` et `info` sont accessibles ; tout autre `/actuator/*` répond 401 ou 404.
+Sur le port public, **tout** `/actuator/*` répond 401 ou 404 (vérifié : même `health` et `info`) ; les sondes ne sont joignables que sur le port 8081.
 
 ## Journaux et corrélation
 

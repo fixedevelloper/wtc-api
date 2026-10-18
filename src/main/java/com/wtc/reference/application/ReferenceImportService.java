@@ -33,6 +33,11 @@ public class ReferenceImportService {
     }
 
     @Transactional
+    public boolean ensureOperator(String countryCode, String shortCode, String name) {
+        return catalog.ensureOperator(countryCode, shortCode, name);
+    }
+
+    @Transactional
     public void setBankPayerCode(String countryCode, String payerCode) {
         catalog.setBankPayerCode(countryCode, payerCode);
     }

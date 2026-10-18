@@ -12,4 +12,11 @@ public record AdminCustomerSummary(
         String countryCode,
         String kycStatus,
         String status,
-        Instant createdAt) {}
+        Balance balance,
+        Instant createdAt) {
+
+    /**
+     * Solde du portefeuille principal (XAF, à défaut le plus ancien) ; absent sans portefeuille.
+     */
+    public record Balance(String amount, String currency) {}
+}

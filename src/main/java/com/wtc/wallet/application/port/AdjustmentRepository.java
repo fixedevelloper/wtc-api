@@ -45,5 +45,6 @@ public interface AdjustmentRepository {
 
     void markRejected(long id, UUID decidedBy, String note);
 
-    Page<AdjustmentView> list(String search, int page, int size, boolean newestFirst);
+    Page<AdjustmentView> list(
+            String search, String status, int page, int size, boolean newestFirst);
 }

@@ -89,11 +89,14 @@ class AdjustmentController {
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
             @RequestParam(required = false) String sort,
-            @RequestParam(required = false) @Size(max = 100) String search) {
+            @RequestParam(required = false) @Size(max = 100) String search,
+            @RequestParam(required = false) @Pattern(regexp = "PENDING|APPROVED|REJECTED")
+                    String status) {
         PageParams order = PageParams.parse(sort, SORT, "createdAt", false);
         var result =
                 adjustments.list(
                         search == null || search.isBlank() ? null : search.strip(),
+                        status,
                         page,
                         size,
                         !order.ascending());

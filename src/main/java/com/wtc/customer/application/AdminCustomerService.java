@@ -46,8 +46,14 @@ public class AdminCustomerService {
     @PreAuthorize("hasAuthority('CUSTOMER_READ')")
     @Transactional(readOnly = true)
     public Paged<AdminCustomerSummary> list(
-            String search, int page, int size, String sortField, boolean ascending) {
-        return customers.search(search, page, size, sortField, ascending);
+            String search,
+            String status,
+            String kycStatus,
+            int page,
+            int size,
+            String sortField,
+            boolean ascending) {
+        return customers.search(search, status, kycStatus, page, size, sortField, ascending);
     }
 
     @PreAuthorize("hasAuthority('CUSTOMER_READ')")

@@ -40,12 +40,42 @@ public class ReferenceSyncService {
     public record Report(
             Instant startedAt,
             int banks,
+            int operators,
             int payerCodes,
             int referenceValues,
             List<String> warnings) {
         public Report {
             warnings = List.copyOf(warnings);
         }
+    }
+
+    /** Résultat de l'import d'un pays. {@code status} : OK, PARTIAL (avertissements) ou FAILED. */
+    public record CountryOutcome(
+            String code,
+            String status,
+            int banks,
+            int operators,
+            int payerCodes,
+            List<String> warnings) {
+        public CountryOutcome {
+            warnings = List.copyOf(warnings);
+        }
+    }
+
+    /** Suivi de l'avancement (appelé depuis le fil qui exécute l'import). */
+    public interface Progress {
+        Progress NONE = new Progress() {};
+
+        /** Pays à traiter, dans l'ordre ; les libellés forment une étape de plus. */
+        default void begin(List<String> countryCodes) {}
+
+        default void countryStarted(String code) {}
+
+        default void countryFinished(CountryOutcome outcome) {}
+
+        default void labelsStarted() {}
+
+        default void labelsFinished(int values, List<String> warnings) {}
     }
 
     private final PayoutGateway gateway;
@@ -64,23 +94,67 @@ public class ReferenceSyncService {
         this.clock = clock;
     }
 
+    /** Importe tous les pays récepteurs, ou seulement {@code onlyCountry} s'il est renseigné. */
     @PreAuthorize("hasAuthority('REFERENCE_WRITE')")
-    public Report sync(UUID actor) {
+    public Report sync(UUID actor, String onlyCountry) {
+        return run(actor, onlyCountry, Progress.NONE);
+    }
+
+    /**
+     * Pays qui seront traités ; refuse un pays inconnu, désactivé ou qui ne reçoit pas. Sans
+     * contrôle de droit : l'appelant l'a déjà fait.
+     */
+    public List<SyncCountry> countriesToSync(String onlyCountry) {
+        List<SyncCountry> countries = references.receivingCountries();
+        if (onlyCountry == null) {
+            return countries;
+        }
+        List<SyncCountry> only =
+                countries.stream().filter(c -> c.code().equalsIgnoreCase(onlyCountry)).toList();
+        if (only.isEmpty()) {
+            throw new DomainException(
+                    ErrorCode.COUNTRY_NOT_FOUND,
+                    "Pays inconnu, désactivé ou qui ne reçoit pas de transferts.");
+        }
+        return only;
+    }
+
+    /**
+     * Exécute l'import. <b>Aucun contrôle de droit ici</b> : seuls {@link #sync} et le service des
+     * tâches d'import (qui vérifient {@code REFERENCE_WRITE}) l'appellent.
+     */
+    public Report run(UUID actor, String onlyCountry, Progress progress) {
         Instant startedAt = clock.instant();
         List<String> warnings = new ArrayList<>();
         int banks = 0;
+        int operatorsCreated = 0;
         int payerCodes = 0;
         int values = 0;
         int providerFailures = 0;
 
-        List<SyncCountry> countries = references.receivingCountries();
+        List<SyncCountry> countries = countriesToSync(onlyCountry);
+        progress.begin(countries.stream().map(SyncCountry::code).toList());
         for (SyncCountry country : countries) {
+            progress.countryStarted(country.code());
+            int banksBefore = banks;
+            int operatorsBefore = operatorsCreated;
+            int payerBefore = payerCodes;
+            int warningsBefore = warnings.size();
             Result<List<PayoutService>> services =
                     gateway.payoutServices(country.code(), country.currency());
             if (!services.isOk()) {
                 providerFailures++;
                 warnings.add(
                         country.code() + " : services indisponibles (" + services.message() + ")");
+                progress.countryFinished(
+                        new CountryOutcome(
+                                country.code(),
+                                "FAILED",
+                                0,
+                                0,
+                                0,
+                                new ArrayList<>(
+                                        warnings.subList(warningsBefore, warnings.size()))));
                 continue;
             }
             Optional<PayoutService> bankService =
@@ -117,6 +191,17 @@ public class ReferenceSyncService {
                                     + ")");
                 }
             }
+            // Les services de Wace autres que la banque deviennent des opérateurs mobiles s'ils
+            // manquent :
+            // c'est ce qui permet de compléter un pays nouvellement ajouté.
+            for (PayoutService service : services.value()) {
+                if (!BANK_SERVICE_CODE.equalsIgnoreCase(service.code())
+                        && service.name() != null
+                        && references.ensureOperator(
+                                country.code(), service.code(), service.name().strip())) {
+                    operatorsCreated++;
+                }
+            }
             for (OperatorRef operator : references.operatorsOf(country.code())) {
                 Optional<PayoutService> match =
                         services.value().stream().filter(s -> matches(operator, s)).findFirst();
@@ -144,13 +229,26 @@ public class ReferenceSyncService {
                                     + ")");
                 }
             }
+            List<String> own = new ArrayList<>(warnings.subList(warningsBefore, warnings.size()));
+            progress.countryFinished(
+                    new CountryOutcome(
+                            country.code(),
+                            own.isEmpty() ? "OK" : "PARTIAL",
+                            banks - banksBefore,
+                            operatorsCreated - operatorsBefore,
+                            payerCodes - payerBefore,
+                            own));
         }
 
+        progress.labelsStarted();
+        int labelWarningsBefore = warnings.size();
         values += importLabels("RELATIONSHIP", "ALL", gateway.relations(), warnings);
         for (String pair : PAIRS) {
             values += importLabels("SOURCE_OF_FUNDS", pair, gateway.originFunds(pair), warnings);
             values += importLabels("TRANSFER_PURPOSE", pair, gateway.reasons(pair), warnings);
         }
+        progress.labelsFinished(
+                values, new ArrayList<>(warnings.subList(labelWarningsBefore, warnings.size())));
         if (!countries.isEmpty() && providerFailures == countries.size() && values == 0) {
             throw new DomainException(
                     ErrorCode.PROVIDER_UNAVAILABLE,
@@ -162,8 +260,14 @@ public class ReferenceSyncService {
                 "REFERENCE",
                 "wace",
                 null,
-                "{\"banks\":"
+                "{\"country\":"
+                        + (onlyCountry == null
+                                ? "null"
+                                : "\"" + onlyCountry.toUpperCase(Locale.ROOT) + "\"")
+                        + ",\"banks\":"
                         + banks
+                        + ",\"operators\":"
+                        + operatorsCreated
                         + ",\"payerCodes\":"
                         + payerCodes
                         + ",\"referenceValues\":"
@@ -171,7 +275,7 @@ public class ReferenceSyncService {
                         + ",\"warnings\":"
                         + warnings.size()
                         + "}");
-        return new Report(startedAt, banks, payerCodes, values, warnings);
+        return new Report(startedAt, banks, operatorsCreated, payerCodes, values, warnings);
     }
 
     private int importLabels(
