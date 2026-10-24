@@ -28,7 +28,7 @@
     <jacoco.version>0.8.15</jacoco.version>
     <jacoco.minimum.line>0.80</jacoco.minimum.line>
     <bucket4j.version>8.21.0</bucket4j.version>
-    <awssdk.version>2.56.0</awssdk.version>
+    <awssdk.version>2.57.1</awssdk.version>
     <openpdf.version>3.0.5</openpdf.version>
     <greenmail.version>2.1.14</greenmail.version>
     <bouncycastle.version>1.86</bouncycastle.version>
