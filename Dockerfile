@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- Étape 1 : compilation (JDK) ----------
-FROM eclipse-temurin:21-jdk-alpine AS build
+FROM eclipse-temurin:24-jdk-alpine AS build
 WORKDIR /workspace
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
@@ -16,7 +16,7 @@ RUN java -Djarmode=tools -jar target/wtc-api-*.jar extract --layers --destinatio
     && mv /extracted/application/wtc-api-*.jar /extracted/application/app.jar
 
 # ---------- Étape 2 : exécution (JRE seul, utilisateur sans privilège) ----------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:24-jre-alpine
 RUN addgroup -S wtc && adduser -S wtc -G wtc
 WORKDIR /app
 COPY --from=build /extracted/dependencies/ ./
